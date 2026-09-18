@@ -10,8 +10,7 @@
 # Fast path  : download a prebuilt, checksum-verified binary from GitHub Releases
 # Fallback   : build from this repo's source with PyInstaller
 #
-# Supported: Linux (x86_64, aarch64) and WSL. For Windows use install.ps1 —
-# macOS is not supported.
+# Supported: Linux (x86_64, aarch64) and WSL. macOS and Windows are not.
 set -euo pipefail
 
 REPO="onefennox/fenox-mobile"
@@ -20,18 +19,18 @@ SRC="$REPO_DIR/src/fenox_mobile_source.py"
 BIN_DIR="$HOME/.local/bin"
 
 # --- platform guard -----------------------------------------------------------
-# Fenox ships prebuilt binaries for Linux (x86_64 + aarch64) and Windows. macOS
-# has no build, and the Linux binaries cannot run there, so refuse rather than
-# installing something that will not start.
+# Fenox ships prebuilt binaries for Linux (x86_64 + aarch64) and runs under WSL.
+# Other platforms have no build, so refuse rather than installing something that
+# cannot start.
 case "$(uname -s)" in
   Linux) ;;
   Darwin)
-    echo "❌ macOS is not supported — fenox ships Linux and Windows builds."
-    echo "   This is a Linux/WSL installer. On Windows, use PowerShell instead:"
-    echo "     irm https://raw.githubusercontent.com/$REPO/main/install.ps1 | iex"
+    echo "❌ macOS is not supported — fenox targets Linux and WSL only."
+    echo "   There is no macOS build, and the Linux binaries cannot run here."
     exit 1 ;;
   *)
-    echo "❌ Unsupported OS: $(uname -s) — fenox supports Linux, WSL and Windows."
+    echo "❌ Unsupported OS: $(uname -s) — fenox supports Linux and WSL."
+    echo "   (A native Windows client is planned as a separate GUI app.)"
     exit 1 ;;
 esac
 

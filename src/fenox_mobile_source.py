@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os, subprocess, sys, json, argparse, shutil, datetime, time, secrets, string, re, signal
 from pathlib import Path
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 from rich.table import Table
@@ -2076,8 +2076,175 @@ def _git_status(path):
     if not branch: return "—"
     return f"[green]{branch}[/green]" + (" [yellow]✗ dirty[/yellow]" if dirty else " [green]✓ clean[/green]")
 
+# --- Interactive input ---------------------------------------------------------
+# Menus respond to a single keypress, which needs the terminal in raw mode.
+# Everything degrades to line input when stdin is not a TTY, so piped input, CI
+# and dumb terminals keep working.
+try:
+    import termios as _termios
+    import tty as _tty
+except ImportError:
+    _termios = _tty = None
+try:
+    import msvcrt as _msvcrt
+except ImportError:
+    _msvcrt = None
+
+_ESCAPE_KEYS = {"\x1b[A": "UP", "\x1b[B": "DOWN", "\x1b[C": "RIGHT", "\x1b[D": "LEFT"}
+_WIN_ARROWS = {"H": "UP", "P": "DOWN", "K": "LEFT", "M": "RIGHT"}
+
+def _read_key(timeout=None):
+    """Read one keypress without waiting for Enter.
+
+    Returns a single lowercased character, or one of UP/DOWN/LEFT/RIGHT/ESC/
+    ENTER/BACKSPACE. Returns None on timeout, or immediately when stdin is not an
+    interactive terminal.
+    """
+    if not sys.stdin.isatty():
+        return None
+
+    if _msvcrt is not None:                    # Windows console
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            if _msvcrt.kbhit():
+                ch = _msvcrt.getwch()
+                if ch in ("\x00", "\xe0"):     # arrow / function key prefix
+                    return _WIN_ARROWS.get(_msvcrt.getwch(), "")
+                if ch == "\r": return "ENTER"
+                if ch == "\x1b": return "ESC"
+                if ch == "\x08": return "BACKSPACE"
+                if ch == "\x03": raise KeyboardInterrupt
+                return ch.lower()
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
+            time.sleep(0.03)
+
+    if _termios is None:
+        return None
+
+    import select
+    fd = sys.stdin.fileno()
+    old = _termios.tcgetattr(fd)
+    try:
+        _tty.setcbreak(fd)
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if not ready:
+            return None
+        ch = sys.stdin.read(1)
+    finally:
+        _termios.tcsetattr(fd, _termios.TCSADRAIN, old)
+
+    if ch == "\x1b":                           # maybe an escape sequence
+        ready, _, _ = select.select([sys.stdin], [], [], 0.02)
+        if ready:
+            rest = sys.stdin.read(2)
+            return _ESCAPE_KEYS.get("\x1b" + rest, "ESC")
+        return "ESC"
+    if ch in ("\r", "\n"): return "ENTER"
+    if ch in ("\x7f", "\x08"): return "BACKSPACE"
+    if ch == "\x03": raise KeyboardInterrupt
+    return ch.lower()
+
+def _wait_any_key(hint="press any key to continue"):
+    """Let the user read an action's output, then continue without needing Enter."""
+    if not sys.stdin.isatty():
+        return
+    console.print(f"\n  [dim]{hint}…[/dim]")
+    try:
+        _read_key()
+    except KeyboardInterrupt:
+        pass
+
+def _ask_key(prompt="select", default="b"):
+    """One-keypress selector. Falls back to a line prompt when stdin is not a TTY."""
+    if not sys.stdin.isatty():
+        return Prompt.ask(f"▸ [dim]{prompt}[/dim]", default=default).lower()
+    console.print(f"  [bold bright_white]▸[/bold bright_white] "
+                  f"[dim]{prompt} — one key, [bold]{default}[/bold] = back[/dim]")
+    try:
+        key = _read_key()
+    except KeyboardInterrupt:
+        return default
+    if key in (None, "esc"):
+        return default
+    return str(key).lower()
+
+def _menu_renderable(title, options, body, breadcrumb, subtitle, footer, accent):
+    """Assemble the pieces of a menu screen into one renderable."""
+    parts = []
+    if breadcrumb:
+        parts.append(Text.from_markup(f"  [dim]{breadcrumb}[/dim]"))
+    if body is not None:
+        parts.append(body() if callable(body) else body)
+    if title:
+        parts.append(Panel(f"[bold bright_white]{title}[/bold bright_white]",
+                           box=box.HEAVY, border_style=accent, padding=(0, 1)))
+    if subtitle:
+        parts.append(Text.from_markup(f"  [dim]{subtitle}[/dim]"))
+    if options:
+        grid = Table.grid(padding=(0, 3))
+        columns = 2 if len(options) > 5 else 1
+        for _ in range(columns):
+            grid.add_column()
+        for i in range(0, len(options), columns):
+            row = [f"[bold {accent}]{k}[/bold {accent}] [dim]{label}[/dim]"
+                   for k, label in options[i:i + columns]]
+            while len(row) < columns:
+                row.append("")
+            grid.add_row(*row)
+        parts.append(grid)
+    parts.append(Text.from_markup(footer))
+    return Group(*parts)
+
+def run_menu(title=None, options=(), *, body=None, breadcrumb="", subtitle=None,
+             footer=None, interval=0.0, accent="bright_cyan",
+             back_keys=("b", "esc")):
+    """Draw a menu, wait for one keypress, and return the key that was chosen.
+
+    options   : list of (key, label) shown as a grid of hints
+    body      : renderable (or callable returning one) drawn above the options
+    interval  : seconds between automatic refreshes; >0 makes the screen live
+    back_keys : keys meaning "go back"; returns None for those
+
+    Unknown keys are ignored without an error message or an Enter press.
+    """
+    valid = [str(k).lower() for k, _ in options]
+    draw = lambda: _menu_renderable(title, options, body, breadcrumb, subtitle,
+                                    footer or "  [bold bright_red]b[/bold bright_red] [dim]back[/dim]",
+                                    accent)
+
+    if not sys.stdin.isatty():                 # scripts, pipes, dumb terminals
+        console.print(draw())
+        # Offer whichever back key is not already an option, so piping input can
+        # never silently fire a short-cut ("b" means bind, not back, on the main menu).
+        back = next((k for k in back_keys if k and k not in valid), "b")
+        answer = Prompt.ask("▸", choices=valid + [back], default=back).lower()
+        return None if answer in back_keys else answer
+
+    if interval and interval > 0:
+        with Live(draw(), console=console, screen=True, refresh_per_second=4) as live:
+            nxt = time.monotonic() + interval
+            while True:
+                key = _read_key(timeout=0.2)
+                if key is not None:
+                    break
+                if time.monotonic() >= nxt:
+                    live.update(draw())
+                    nxt = time.monotonic() + interval
+    else:
+        console.print(draw())
+        key = _read_key()
+
+    if key is None:
+        return None
+    if key in back_keys:
+        return None
+    if not valid or key in valid:
+        return key
+    return ""                                  # unknown key → caller redraws
+
 def _banner():
-    """Render a sleek header banner with summary stats."""
+    """Header banner with live summary stats, as a renderable."""
     connected_ids = set(get_connected_device_ids())
     online_count = 0
     for key, info in DEVICES.items():
@@ -2108,13 +2275,15 @@ def _banner():
         f"[bold]{total_devices}[/bold] [dim]devices[/dim]  [dim]•[/dim]  "
         f"[bold]{total_apps}[/bold] [dim]apps[/dim]"
     )
-    console.print(Panel(header, box=box.HEAVY, border_style="bright_blue", padding=(0, 1)))
+    parts = [Panel(header, box=box.HEAVY, border_style="bright_blue", padding=(0, 1))]
     if stats_str:
-        console.print(f"  {stats_str}")
+        parts.append(Text.from_markup(f"  {stats_str}"))
+    return Group(*parts)
     console.print()
 
-def build_dashboard():
-    """Render the live dashboard; returns {idx: key} maps for devices and apps."""
+def _build_dashboard():
+    """Pure render of the dashboard: (renderable, dev_index, app_index)."""
+    _parts = []
     connected_ids = set(get_connected_device_ids())
     dev_table = Table(
         box=box.ROUNDED, header_style="bold bright_cyan",
@@ -2200,7 +2369,7 @@ def build_dashboard():
             )
         dev_index[idx] = key
         idx += 1
-    console.print(dev_table)
+    _parts.append(dev_table)
 
     app_table = Table(
         box=box.ROUNDED, header_style="bold bright_green",
@@ -2233,8 +2402,8 @@ def build_dashboard():
         )
         app_index[idx] = key
         idx += 1
-    console.print(app_table)
-    return dev_index, app_index
+    _parts.append(app_table)
+    return Group(*_parts), dev_index, app_index
 
 def _open_last_capture(key):
     for media_type, (wsl_dir, win_dir) in [("screenshot", (SHOTS_DIR, WIN_SHOTS_DIR)), ("record", (RECS_DIR, WIN_RECS_DIR))]:
@@ -2691,7 +2860,7 @@ def _device_screen_menu(key):
             "  [bold bright_cyan]A[/bold bright_cyan] Copy text → device  [bold bright_cyan]B[/bold bright_cyan] Read clipboard      [bold bright_cyan]C[/bold bright_cyan] Open URL"
         )
         console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]action[/dim]", default="b")
+        choice = _ask_key("action")
         if choice == "b": return
         elif choice == "1": action_mirror(key)
         elif choice == "2": action_media(key, "screenshot")
@@ -2705,7 +2874,7 @@ def _device_screen_menu(key):
         elif choice.upper() == "A": _action_clipboard_copy(dev_id)
         elif choice.upper() == "B": _action_clipboard_read(dev_id)
         elif choice.upper() == "C": _action_open_url(dev_id)
-        Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
+        _wait_any_key()
 
 def _device_apps_menu(key):
     dev_id = check_and_connect(key, interactive=True)
@@ -2719,7 +2888,7 @@ def _device_apps_menu(key):
             "  [bold bright_green]7[/bold bright_green] Install APK from PC  [bold bright_green]8[/bold bright_green] Nuke + relaunch"
         )
         console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]action[/dim]", default="b")
+        choice = _ask_key("action")
         if choice == "b": return
         elif choice == "1":
             if APPS:
@@ -2735,7 +2904,7 @@ def _device_apps_menu(key):
             if APPS:
                 app_key = Prompt.ask("App", choices=list(APPS.keys()))
                 action_nuke(app_key, key)
-        Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
+        _wait_any_key()
 
 def _device_files_menu(key):
     dev_id = check_and_connect(key, interactive=True)
@@ -2749,12 +2918,12 @@ def _device_files_menu(key):
             "  [bold bright_yellow]3[/bold bright_yellow] Browse device storage"
         )
         console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]action[/dim]", default="b")
+        choice = _ask_key("action")
         if choice == "b": return
         elif choice == "1": _action_push_file(dev_id)
         elif choice == "2": _action_pull_file(dev_id)
         elif choice == "3": _action_browse_storage(dev_id)
-        Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
+        _wait_any_key()
 
 def _device_control_menu(key):
     dev_id = check_and_connect(key, interactive=True)
@@ -2768,7 +2937,7 @@ def _device_control_menu(key):
             "  [bold bright_magenta]7[/bold bright_magenta] Interactive shell"
         )
         console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]action[/dim]", default="b")
+        choice = _ask_key("action")
         if choice == "b": return
         elif choice == "1": _action_reboot_menu(dev_id)
         elif choice == "2": _action_toggle_wifi(dev_id)
@@ -2777,7 +2946,7 @@ def _device_control_menu(key):
         elif choice == "5": _action_volume_control(dev_id)
         elif choice == "6": _action_brightness_control(dev_id)
         elif choice == "7": _action_interactive_shell(dev_id)
-        Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
+        _wait_any_key()
 
 def _device_devtools_menu(key):
     dev_id = check_and_connect(key, interactive=True)
@@ -2792,7 +2961,7 @@ def _device_devtools_menu(key):
             "  [bold bright_green]H[/bold bright_green] ❤️  [bold]Live Health Monitor[/bold]"
         )
         console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]action[/dim]", default="b")
+        choice = _ask_key("action")
         if choice == "b": return
         elif choice == "1": _action_device_info_dashboard(dev_id)
         elif choice == "2": _action_battery_info(dev_id)
@@ -2810,7 +2979,7 @@ def _device_devtools_menu(key):
                 app_key = Prompt.ask("App", choices=list(APPS.keys()))
                 action_logs(app_key, key)
         elif choice.upper() == "H": _action_health_monitor(dev_id)
-        Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
+        _wait_any_key()
 
 def _device_config_menu(key):
     while True:
@@ -2826,7 +2995,7 @@ def _device_config_menu(key):
             "  [bold bright_cyan]d[/bold bright_cyan] 🔄 Refresh info"
         )
         console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]action[/dim]", default="b")
+        choice = _ask_key("action")
         if choice == "b": return
         elif choice == "d": continue
         elif choice == "e":
@@ -2841,13 +3010,74 @@ def _device_config_menu(key):
         elif choice == "h":
             if Confirm.ask(f"[red]Remove '{key}'?[/red]"):
                 del DEVICES[key]; save_config(); console.print("[green]✅ Removed[/green]"); return
-        Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
+        _wait_any_key()
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  MAIN DEVICE COMMAND CENTER
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _device_summary(key):
+    """One-line status for a device, from config only (cheap, safe to redraw)."""
+    info = DEVICES.get(key, {})
+    bits = [str(info.get("model") or "Android device")]
+    if info.get("type") == "usb":
+        if info.get("serial"):
+            bits.append(str(info["serial"]))
+    elif info.get("ip"):
+        bits.append(f"{info.get('ip')}:{info.get('port', '')}")
+    if not is_device_enabled(info):
+        bits.append("disabled")
+    return " · ".join(bits)
+
+def _open_config_in_editor():
+    """Open ~/.fenox.json in the user's editor, without assuming one exists."""
+    editor = os.environ.get("EDITOR") or next(
+        (e for e in ("nano", "vim", "vi", "emacs") if shutil.which(e)), None)
+    if not editor:
+        console.print(f"[yellow]No editor found — your config is at {CONFIG_PATH}[/yellow]")
+        return
+    try:
+        subprocess.call([editor, CONFIG_PATH])
+    except OSError as e:
+        console.print(f"[red]❌ Could not launch {editor}: {e}[/red]")
+
+def _rename_device_prompt():
+    if not DEVICES:
+        console.print("[yellow]No devices yet — run [cyan]fenox discover[/cyan] to find some.[/yellow]")
+        return
+    action_rename_device(Prompt.ask("Device to rename", choices=list(DEVICES.keys())))
+
 def device_actions(key):
+    """Per-device Command Center: grouped categories first, expert keypad on demand."""
+    if key not in DEVICES:
+        return
+    categories = [
+        ("1", "🖥  Screen & input", _device_screen_menu),
+        ("2", "📦  Apps", _device_apps_menu),
+        ("3", "📁  Files", _device_files_menu),
+        ("4", "🔧  Device control", _device_control_menu),
+        ("5", "🔗  Dev tools", _device_devtools_menu),
+        ("6", "⚙️   Configure device", _device_config_menu),
+        ("e", "⌨️   Expert keypad — every action on one screen", _device_actions_expert),
+    ]
+    while True:
+        choice = run_menu(
+            key.upper(),
+            [(k, label) for k, label, _ in categories],
+            breadcrumb="dashboard › device",
+            subtitle=_device_summary(key),
+            accent="bright_cyan",
+        )
+        if choice is None:
+            return
+        if choice == "":
+            continue
+        for k, _, fn in categories:
+            if choice == k:
+                fn(key)
+                break
+
+def _device_actions_expert(key):
     while True:
         console.clear()
         _device_header(key)
@@ -2945,7 +3175,7 @@ def device_actions(key):
             if Confirm.ask(f"[red]Remove '{key}'?[/red]"):
                 del DEVICES[key]; save_config(); console.print("[green]✅ Removed[/green]"); return
         elif c == "d": continue
-        Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
+        _wait_any_key()
 
 def app_actions(key):
     while True:
@@ -2978,7 +3208,7 @@ def app_actions(key):
         )
         console.print()
         console.print("  [bold bright_red]b[/bold bright_red] ⬅  [dim]Back to dashboard[/dim]")
-        choice = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]action[/dim]", choices=["1", "2", "3", "4", "5", "6", "7", "b"], default="b")
+        choice = _ask_key("action")
         if choice == "b": return
         if choice in ("1", "2"):
             dev_key = Prompt.ask("Device", choices=list(DEVICES.keys()) + ["all"], default=list(DEVICES.keys())[0] if DEVICES else "all")
@@ -3000,7 +3230,7 @@ def app_actions(key):
                 console.print("[yellow]📦 flutter pub get...[/yellow]"); os.system("flutter pub get")
         elif choice == "7":
             action_backend(key)
-        Prompt.ask("\n[dim]Press Enter to continue...[/dim]", default="")
+        _wait_any_key()
 
 def action_discover():
     console.print(Panel.fit("[bold cyan]📡 DEVICE DISCOVERY[/bold cyan]", border_style="cyan"))
@@ -3496,68 +3726,59 @@ def _preflight(app_key, dev_key, is_remote):
     return True
 
 def interactive_menu():
+    """Live dashboard: keeps itself up to date while waiting for one keypress."""
+    shortcuts = [
+        ("d", "Doctor"), ("s", "Sync"), ("p", "Pair"), ("q", "Pair QR"),
+        ("f", "Discover"), ("n", "Scan"), ("a", "Add app"),
+        ("+", "Edit device"), ("-", "Delete device"), ("g", "Toggle device"),
+        ("m", "Rename device"), ("b", "Bind all ports"), ("r", "Batch screenshot"),
+        ("c", "Edit config"),
+    ]
+    handlers = {
+        "d": action_doctor, "s": action_sync, "p": action_pair, "q": action_pair_qr,
+        "f": action_discover, "n": action_scan, "a": lambda: action_add_app(),
+        "b": lambda: action_bind("all", "all"),
+        "r": lambda: action_media("all", "screenshot"),
+        "+": action_edit_device, "-": action_delete_device,
+        "g": action_toggle_device, "m": _rename_device_prompt,
+        "c": _open_config_in_editor,
+    }
+    # The dashboard is re-rendered on every refresh, so the index maps are
+    # captured here rather than passed around.
+    indices = {}
+
+    def body():
+        renderable, dev_index, app_index = _build_dashboard()
+        indices["dev"], indices["app"] = dev_index, app_index
+        return Group(_banner(), renderable)
+
     while True:
-        console.clear()
-        _banner()
-        dev_index, app_index = build_dashboard()
-        console.print()
-        console.print(Rule(style="dim bright_blue"))
-        console.print(
-            "  [bold bright_cyan]d[/bold bright_cyan] [dim]Doctor[/dim]  "
-            "[bold bright_cyan]s[/bold bright_cyan] [dim]Sync[/dim]  "
-            "[bold bright_cyan]p[/bold bright_cyan] [dim]Pair[/dim]  "
-            "[bold bright_cyan]q[/bold bright_cyan] [dim]Pair QR[/dim]  "
-            "[bold bright_cyan]f[/bold bright_cyan] [dim]Discover[/dim]  "
-            "[bold bright_green]a[/bold bright_green] [dim]Add app[/dim]  "
-            "[bold bright_green]+[/bold bright_green] [dim]Edit dev[/dim]  "
-            "[bold bright_red]-[/bold bright_red] [dim]Del dev[/dim]  "
-            "[bold bright_yellow]g[/bold bright_yellow] [dim]Toggle[/dim]  "
-            "[bold bright_green]m[/bold bright_green] [dim]Rename[/dim]"
+        choice = run_menu(
+            options=shortcuts,
+            body=body,
+            breadcrumb=f"fenox v{FENOX_VERSION} · live dashboard",
+            subtitle="press a device # or app # to open it, or use a shortcut below",
+            footer=("  [bold bright_red]x[/bold bright_red] [dim]quit[/dim]"
+                    "    [dim]· single keypress, no Enter[/dim]"),
+            interval=5.0,
+            accent="bright_cyan",
+            back_keys=("x", "esc"),
         )
-        console.print(
-            "  [bold bright_cyan]n[/bold bright_cyan] [dim]Scan[/dim]  "
-            "[bold bright_cyan]b[/bold bright_cyan] [dim]Bind all[/dim]  "
-            "[bold bright_cyan]r[/bold bright_cyan] [dim]Batch[/dim]  "
-            "[bold bright_cyan]c[/bold bright_cyan] [dim]Config[/dim]  "
-            "[bold bright_red]x[/bold bright_red] [dim]Exit[/dim]"
-        )
-        console.print()
-        console.print("  [dim]Tap a [bold]device #[/bold] to open its Command Center, or press a shortcut above[/dim]")
-        console.print()
-        choice = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]device # or command[/dim]", default="x")
-        if choice == "x":
-            break
-        elif choice == "d": action_doctor()
-        elif choice == "s": action_sync()
-        elif choice == "p": action_pair()
-        elif choice == "q": action_pair_qr()
-        elif choice == "f": action_discover()
-        elif choice == "a": action_add_app()
-        elif choice == "n": action_scan()
-        elif choice == "b": action_bind("all", "all")
-        elif choice == "r": action_media("all", "screenshot")
-        elif choice == "+": action_edit_device()
-        elif choice == "-": action_delete_device()
-        elif choice == "g": action_toggle_device()
-        elif choice == "m":
-            if DEVICES:
-                key = Prompt.ask("Device to rename", choices=list(DEVICES.keys()))
-                action_rename_device(key)
-            else:
-                console.print("[yellow]No devices configured.[/yellow]")
-        elif choice == "c": os.system(f"${{EDITOR:-nano}} {CONFIG_PATH}")
-        elif choice.isdigit():
-            n = int(choice)
-            if n in dev_index:
-                device_actions(dev_index[n])
-            elif n in app_index:
-                app_actions(app_index[n])
-            else:
-                console.print("[red]Invalid number.[/red]")
-                Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
-        else:
-            console.print("[red]Unknown option.[/red]")
-            Prompt.ask("\n[dim]Press Enter...[/dim]", default="")
+        if choice is None:
+            return
+        if choice == "":
+            continue
+        if choice.isdigit():
+            number = int(choice)
+            if number in indices.get("dev", {}):
+                device_actions(indices["dev"][number])
+            elif number in indices.get("app", {}):
+                app_actions(indices["app"][number])
+            continue
+        handler = handlers.get(choice)
+        if handler:
+            handler()
+            _wait_any_key("press any key to return to the dashboard")
 
 # --- Main Entry Point ---
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 
 Fenox bundles ADB connections, reverse-port binding, log streaming, screen mirroring, media capture, and Flutter launches into instant terminal aliases — USB, wireless, and emulator alike, including from WSL.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL%20%7C%20Windows-lightgrey)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL-lightgrey)
 
 ## ✨ Highlights
 
@@ -21,17 +21,18 @@ Fenox bundles ADB connections, reverse-port binding, log streaming, screen mirro
 
 | | Needed for |
 | --- | --- |
-| **Linux** (x86_64 or aarch64) or **WSL** | the bash installer and the prebuilt binaries |
-| **Windows** 10/11 | the PowerShell installer and the prebuilt `.exe` |
+| **Linux** (x86_64 or aarch64) or **WSL** | the installer and the prebuilt binaries |
 | `adb` | everything — from Android platform-tools |
 | `flutter` | launching and building your apps |
 | `scrcpy` | screen mirroring — optional |
-| `tmux` | `fenox run <app> all` blast deploys — Linux/WSL only, optional |
+| `tmux` | `fenox run <app> all` blast deploys — optional |
 | `python3` 3.8+ | only for a from-source build or plugins |
 
-macOS is **not** supported: there is no macOS build, and the Linux binaries
-cannot run there. The installer tells you so instead of installing something
-that will not start.
+**Platform support: Linux and WSL.** macOS is not supported — there is no macOS
+build and the Linux binaries cannot run there, so the installer refuses with a
+clear message rather than installing something that will not start. A native
+**Windows client is planned as a separate GUI app**; this terminal tool does not
+claim Windows support yet.
 
 ## 📦 Install
 
@@ -41,18 +42,7 @@ that will not start.
 curl -fsSL https://raw.githubusercontent.com/onefennox/fenox-mobile/main/install.sh | bash
 ```
 
-**Windows** — from PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/onefennox/fenox-mobile/main/install.ps1 | iex
-```
-
-The Windows installer puts `fenox-mobile.exe` in
-`%LOCALAPPDATA%\Programs\fenox`, adds it to your user `PATH`, and back that
-previous install up. Use `install.ps1 -Version v1.0.0` to pin a release, or
-`-NoPath` to leave `PATH` alone.
-
-**From source** (Linux/WSL):
+**From source:**
 
 ```bash
 git clone https://github.com/onefennox/fenox-mobile.git
@@ -104,7 +94,7 @@ real.
 fenox update        # checks GitHub Releases, downloads + checksum-verifies, swaps atomically
 ```
 
-Runs from a local repo clone? It rebuilds from source instead. Every release ships checksum-verified binaries for **linux-x86_64**, **linux-aarch64** and **windows-x86_64**, each with a `.sha256` file and an aggregate `SHA256SUMS`.
+Runs from a local repo clone? It rebuilds from source instead. Every release ships checksum-verified binaries for **linux-x86_64** and **linux-aarch64**, each with a `.sha256` file and an aggregate `SHA256SUMS`.
 
 ## 🔌 USB Debugging (WSL)
 
@@ -224,13 +214,27 @@ Aliases for the new app (`<app>-all`, `<app>-release`, `<app>-<device>`…) are 
 
 ## 🖥️ Interactive Dashboard
 
-Running `fenox-mobile` with no arguments opens a **live dashboard**: device telemetry (battery 🔋, screen, Android version, storage, foreground app, health score), app status (git branch, auto-resolved package name, last run), and per-device / per-app quick actions (mirror, screenshot, record, logs, wake/lock, bind, nuke, build, run). Press `x` to exit.
+Running `fenox-mobile` with no arguments opens a **live dashboard** that keeps
+itself up to date while you decide what to do:
+
+- **Single keypress — no Enter.** Shortcuts, device `#`s and app `#`s all act on
+  one key, and the screen refreshes itself every few seconds.
+- **Device telemetry**: battery 🔋, screen, Android version, storage, foreground
+  app and a health score, plus app status (git branch, resolved package name,
+  last run).
+- **A grouped Command Center per device** — Screen & input, Apps, Files, Device
+  control, Dev tools, and Configure — rather than a wall of letter keys. An
+  **expert keypad** (`e`) still puts every action on a single screen.
+- **Quiet navigation**: unknown keys are ignored instead of printing an error and
+  demanding Enter, and `b` always goes back.
+
+Press `x` to quit. When stdin is not a terminal (piped input, CI), the menu falls
+back to a validated line prompt, so scripts keep working.
 
 ## 💾 Where Files Land
 
 On WSL everything saves under `C:\Users\<you>\Desktop\Fenox\`, so it is viewable
-from Windows. Everywhere else the same layout lives under `~/Fenox`: on Linux
-that is `~/Fenox`, and on Windows `%USERPROFILE%\Desktop\Fenox`.
+from Windows. On plain Linux the same layout lives under `~/Fenox`.
 
 | Output | Location |
 | --- | --- |
@@ -245,7 +249,7 @@ If you prefer using the tool explicitly or want to script it further, you can us
 
 | Command | Description |
 | --- | --- |
-| `fenox-mobile` | Opens the interactive GUI menu. |
+| `fenox-mobile` | Opens the live interactive dashboard (single-keypress). |
 | `fenox-connect` | ⚡ **One-shot connect**: connects all devices (USB + wireless, no prompts), explains stuck devices, binds all ports. `fenox-connect <device>` for one. |
 | `fenox-mobile rename <old> <new>` | ✏️ **Rename device** — regenerates all aliases instantly. `m` in the menu does the same. |
 | `fenox-mobile run myapp mydevice` | Standard launch. Use `all` as the device for Tmux blast deployment (`fenox-mobile run myapp all`). |
@@ -301,9 +305,10 @@ domain once with `fenox init`, or per app with
 
 ## ❓ FAQ
 
-**Does it work on macOS?** No. Fenox ships Linux and Windows builds only; the
-README used to claim macOS, and the installer now refuses clearly rather than
-installing a Linux binary that cannot run.
+**Does it work on macOS or Windows?** Not today. Fenox targets Linux and WSL:
+the installer refuses on macOS rather than installing a Linux binary that cannot
+run. Windows is planned as a separate GUI client, not a port of this CLI — the
+terminal tool never claimed Windows support for its device features.
 
 **Does it need a Python toolchain?** No. The installers fetch a self-contained
 binary. Python 3.8+ is only needed to build from source or to write plugins.

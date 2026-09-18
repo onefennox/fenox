@@ -18,10 +18,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `fenox` symlink, config, backups and run history, and strips only its own hooks
   from `~/.bashrc` and `~/.zshrc`. Running it from a source checkout never
   deletes the checkout.
-- **Windows support:** a PowerShell installer (`install.ps1`) with the same
-  checksum verification, a `windows-latest` build in the release workflow that
-  also parses `install.ps1` to catch syntax errors, and a prebuilt
-  `fenox-mobile-windows-x86_64.exe` release artifact.
 - **End-to-end release test** (`tests/test_release_e2e.sh`): stages a real release
   layout, serves it over loopback HTTP and exercises the one-liner install, the
   repo-clone install, the per-asset checksum fallback and refusal of a tampered
@@ -31,6 +27,26 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **The interactive dashboard is now actually live and single-keypress.** It
+  previously read as a live dashboard but required **Enter** for every choice and
+  only redrew after an action returned. It now responds to a single keypress and
+  refreshes itself every few seconds while waiting, using a portable raw-key
+  layer (`termios`/`tty` on POSIX, `msvcrt` on Windows) that degrades to a
+  validated line prompt when stdin is not a terminal.
+- **Per-device navigation is grouped instead of a wall of keys.** `device_actions`
+  presented 30+ single-letter commands (`A`–`Z`, `0`, `#`, `@`, `~`) at once. It
+  is now a Command Center offering six named categories, with the full keypad
+  still available as an explicit expert mode (`e`) so nothing was lost.
+- Every menu now accepts a single keypress to continue instead of demanding
+  Enter, unknown keys are ignored rather than printing an error, and four
+  category menus that were previously unreachable dead code are now the actual
+  navigation.
+- **Platform support is now stated honestly: Linux and WSL.** The README and
+  badge no longer claim Windows. A native Windows client needs a real GUI and is
+  planned as a separate application rather than a port of this terminal tool;
+  the CLI's device layer is POSIX-only today (it shells out to `timeout`, `tmux`
+  and `/dev/null` redirection), so shipping a Windows binary would have installed
+  something that could not talk to a device.
 - **A fresh install starts empty.** First run used to write a sample config
   containing a fictional `myapp`, a `myphone` and an `emulator`, so every new
   user got aliases such as `myapp-myphone` pointing at projects and devices that
@@ -59,8 +75,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Remote launches without a configured remote domain fall back to the local API
   URL and say so, instead of embedding a placeholder `example.com` URL.
 - macOS is no longer advertised. The installer downloaded Linux binaries on
-  macOS; it now refuses with a clear message pointing Windows users at
-  `install.ps1`.
+  macOS; it now refuses with a clear message instead of installing a binary that
+  cannot run.
 
 ### Security
 
