@@ -4,7 +4,7 @@
 
 Fenox bundles ADB connections, reverse-port binding, log streaming, screen mirroring, media capture, and Flutter launches into instant terminal aliases — USB, wireless, and emulator alike, including from WSL.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL%20%7C%20macOS-lightgrey)
+![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL%20%7C%20Windows-lightgrey)
 
 ## ✨ Highlights
 
@@ -17,31 +17,80 @@ Fenox bundles ADB connections, reverse-port binding, log streaming, screen mirro
 - 🩺 **Doctor & crash triage** — parallel device health checks, one-command crash log extraction
 - 🪟 **Clean UX** — bash + zsh completions, shell aliases, no tracebacks on Ctrl+C
 
+## 📋 Requirements
+
+| | Needed for |
+| --- | --- |
+| **Linux** (x86_64 or aarch64) or **WSL** | the bash installer and the prebuilt binaries |
+| **Windows** 10/11 | the PowerShell installer and the prebuilt `.exe` |
+| `adb` | everything — from Android platform-tools |
+| `flutter` | launching and building your apps |
+| `scrcpy` | screen mirroring — optional |
+| `tmux` | `fenox run <app> all` blast deploys — Linux/WSL only, optional |
+| `python3` 3.8+ | only for a from-source build or plugins |
+
+macOS is **not** supported: there is no macOS build, and the Linux binaries
+cannot run there. The installer tells you so instead of installing something
+that will not start.
+
 ## 📦 Install
 
-**One-liner (prebuilt binary, no toolchain needed):**
+**Linux / WSL** — prebuilt binary, no toolchain needed:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/onefennox/fenox-mobile/main/install.sh | bash
 ```
 
-**From source:**
+**Windows** — from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/onefennox/fenox-mobile/main/install.ps1 | iex
+```
+
+The Windows installer puts `fenox-mobile.exe` in
+`%LOCALAPPDATA%\Programs\fenox`, adds it to your user `PATH`, and back that
+previous install up. Use `install.ps1 -Version v1.0.0` to pin a release, or
+`-NoPath` to leave `PATH` alone.
+
+**From source** (Linux/WSL):
 
 ```bash
 git clone https://github.com/onefennox/fenox-mobile.git
 cd fenox-mobile && bash install.sh
 ```
 
-Both paths install to `~/.local/bin/fenox-mobile` with a `fenox` alias, and back up any previous install. Force a source build with `FENOX_BUILD_FROM_SOURCE=1 bash install.sh`.
+The bash installer installs to `~/.local/bin/fenox-mobile` with a `fenox` alias
+and backs up any previous install. Force a source build with
+`FENOX_BUILD_FROM_SOURCE=1 bash install.sh`.
+
+Every path downloads from GitHub Releases and **verifies the SHA-256 before
+installing anything** — if no checksum is published, or it does not match,
+nothing is written.
 
 ## 🚀 Quick Start (60 seconds)
 
 ```bash
-fenox init          # first-run setup: checks tools, installs the alias engine
+fenox init          # one-time setup — see below
 fenox connect       # connects every saved device + binds all app ports
 fenox doctor        # health-check; auto-adds any USB phone it finds
 <app>-<device>      # e.g. myapp-myphone — your app launches on the device
 ```
+
+### What `fenox init` asks you (once)
+
+1. **Where do your Flutter projects live?** It validates the path and offers to
+   create it, then remembers it in `~/.fenox.json`. Nothing else ever has to
+   guess. Re-run the questions any time with `fenox init --reset-settings`.
+2. **Your remote API domain** (optional) — used to guess production URLs as
+   `https://<app>.<domain>/api`. Press Enter to skip; fenox asks later only if a
+   remote launch or release build actually needs it.
+
+It then offers to install the alias engine and shell completions into your
+`~/.bashrc` or `~/.zshrc`, and to scan your projects directory right away.
+
+Runs without a terminal (CI, scripts)? It skips the questions instead of
+hanging, and falls back to your projects directory only until you run it for
+real.
 
 ### First time on a new phone?
 
@@ -55,7 +104,7 @@ fenox doctor        # health-check; auto-adds any USB phone it finds
 fenox update        # checks GitHub Releases, downloads + checksum-verifies, swaps atomically
 ```
 
-Runs from a local repo clone? It rebuilds from source instead. Every release ships checksumed binaries for **linux-x86_64** and **linux-aarch64**.
+Runs from a local repo clone? It rebuilds from source instead. Every release ships checksum-verified binaries for **linux-x86_64**, **linux-aarch64** and **windows-x86_64**, each with a `.sha256` file and an aggregate `SHA256SUMS`.
 
 ## 🔌 USB Debugging (WSL)
 
@@ -69,11 +118,16 @@ Fenox looks for `adb.exe` in `C:\platform-tools`, your Windows `Android\Sdk\plat
 
 ## ⚙️ Configuration (`~/.fenox.json`)
 
-All of your projects, remote server URLs, and test devices are managed in a single JSON file located at `~/.fenox.json`. This file is generated automatically the first time the program runs.
+All of your projects, remote server URLs, and test devices are managed in a single JSON file located at `~/.fenox.json`.
 
-If you add a new device or start a new project, **simply edit this file**. Fenox Mobile will instantly read it and generate the required terminal commands dynamically! *(Note: If a device drops offline and you enter a custom IP/Port via the interactive prompt, the tool will offer to save it here automatically).*
+It starts **empty** and fills up from what you actually do: `fenox init` records your projects directory and remote domain, `fenox doctor` and `fenox discover` add devices, and `fenox scan`/`add-app` add projects. You can also edit it by hand at any time — Fenox reads it immediately and regenerates the terminal commands, live.
+
+> 🎯 A `settings.remote_domain` of `""` simply means "not configured yet". Set it once in `fenox init` and every project registered afterwards follows the convention (`https://<app>.<domain>/api`).
 
 ### Example `~/.fenox.json`
+
+Here is what it looks like once you have registered one project and one device
+(the names are yours, not defaults — nothing is pre-filled):
 
 ```
 {
@@ -103,7 +157,7 @@ If you add a new device or start a new project, **simply edit this file**. Fenox
 }
 ```
 
-> 🎯 `settings.remote_domain` is the convention used to guess remote API URLs (`https://<app>.<domain>/api`) when registering a new project — change it once and every future project follows it.
+> 💡 If a device drops offline and you supply a custom IP/port at the prompt, fenox offers to save it here for next time.
 
 ## ⚡ Command Reference Table
 
@@ -158,11 +212,11 @@ What gets auto-detected:
 
 | Field | How it's guessed |
 | --- | --- |
-| Path | Flutter project (has `pubspec.yaml` + `android/`) found under `~/Projects` |
+| Path | Flutter project (has `pubspec.yaml` + `android/`) found under your projects directory |
 | Alias | Repo name for generic dirs (`mobile`, `app`, `frontend`…), else the folder name |
 | Backend port | Sniffed from `.env` (`PORT=`), `package.json` scripts, or Python servers |
 | `api_local` | `http://localhost:<port>/api` |
-| `api_remote` | `https://<app>.<remote_domain>/api` (edit `settings.remote_domain` once) |
+| `api_remote` | `https://<app>.<remote_domain>/api` (from your one-time setup in `fenox init`) |
 | Backend launcher | `npm run dev` / `npm start` / `python <file>` / `go run .` |
 | Android package | Resolved from `build.gradle` / `AndroidManifest.xml` |
 
@@ -172,16 +226,18 @@ Aliases for the new app (`<app>-all`, `<app>-release`, `<app>-<device>`…) are 
 
 Running `fenox-mobile` with no arguments opens a **live dashboard**: device telemetry (battery 🔋, screen, Android version, storage, foreground app, health score), app status (git branch, auto-resolved package name, last run), and per-device / per-app quick actions (mirror, screenshot, record, logs, wake/lock, bind, nuke, build, run). Press `x` to exit.
 
-## 💾 Where Files Land (Windows Desktop)
+## 💾 Where Files Land
 
-Everything auto-saves under `C:\Users\<you>\Desktop\Fenox\` so it's viewable from Windows:
+On WSL everything saves under `C:\Users\<you>\Desktop\Fenox\`, so it is viewable
+from Windows. Everywhere else the same layout lives under `~/Fenox`: on Linux
+that is `~/Fenox`, and on Windows `%USERPROFILE%\Desktop\Fenox`.
 
 | Output | Location |
 | --- | --- |
-| 📸 Screenshots | `Desktop\Fenox\Screenshots\<device>\` (also copied to clipboard) |
-| 🎥 Recordings | `Desktop\Fenox\Recordings\<device>\` |
-| 📋 Logs | `Desktop\Fenox\Logs\<app>_<device>_<ts>.log` (crash lines flagged) |
-| 📦 Release APKs | `Desktop\Fenox\APKs\<app>_release_<ts>.apk` |
+| 📸 Screenshots | `Fenox/Screenshots/<device>/` (also copied to clipboard) |
+| 🎥 Recordings | `Fenox/Recordings/<device>/` |
+| 📋 Logs | `Fenox/Logs/<app>_<device>_<ts>.log` (crash lines flagged) |
+| 📦 Release APKs | `Fenox/APKs/<app>_release_<ts>.apk` |
 
 ## 🛠️ Raw CLI Commands (Advanced/Scripting)
 
@@ -200,3 +256,74 @@ If you prefer using the tool explicitly or want to script it further, you can us
 | `fenox-mobile mirror mydevice` | Start Scrcpy mirroring. |
 | `fenox-mobile pair` | Start Wireless Pairing Wizard. |
 | `fenox-mobile doctor` | Run full system health check and restart. |
+| `fenox-mobile init` | One-time setup. `--reset-settings` re-asks the questions. |
+| `fenox-mobile uninstall` | Remove fenox, its config and its shell hooks. `--yes` skips the prompt, `--keep-config` keeps `~/.fenox.json`. |
+
+## 🧹 Uninstall
+
+```bash
+fenox uninstall              # shows exactly what it will remove, then confirms
+fenox uninstall --yes        # no prompt (for scripting)
+fenox uninstall --keep-config  # keep ~/.fenox.json and your devices/apps
+```
+
+It removes the installed binary, the `fenox` symlink, the config, config backups
+and the run history, and strips only its own hooks from `~/.bashrc` and
+`~/.zshrc` — other lines in those files are left untouched. On Windows, run
+`fenox-mobile uninstall` and then remove `%LOCALAPPDATA%\Programs\fenox` from
+your `PATH`. Running it from a source checkout never deletes the checkout.
+
+## 🩺 Troubleshooting
+
+**`fenox doctor` finds no devices.** Make sure `adb` is on your `PATH`, the
+phone is unlocked, and you have accepted the *"Allow USB debugging?"* prompt on
+the device. On WSL, USB only works through the Windows adb server — see below.
+
+**`<app>-<device>` alias not found.** Aliases live in your shell, so re-source
+your rc file (`source ~/.bashrc`) or open a new terminal. Check the hook is
+installed: `fenox init` prints whether it is.
+
+**"command not found: fenox".** `~/.local/bin` is not on your `PATH`. Add
+`export PATH="$HOME/.local/bin:$PATH"` to your rc file, or re-run the installer.
+
+**Checksum mismatch on install.** The download did not match the published
+SHA-256, so nothing was installed. This is almost always a stale mirror or a
+flaky connection — retry, or install from a clone with
+`FENOX_BUILD_FROM_SOURCE=1 bash install.sh`.
+
+**Config got corrupted.** Fenox backs the file up to `~/.fenox.json.corrupt-<ts>`
+and starts from a clean one rather than failing. Rolling backups of the last five
+versions are kept in `~/.fenox-backups/`.
+
+**`fenox build` refuses to run.** A release APK needs a remote API URL. Set your
+domain once with `fenox init`, or per app with
+`fenox add-app --api-remote https://api.example.com --update --yes`.
+
+## ❓ FAQ
+
+**Does it work on macOS?** No. Fenox ships Linux and Windows builds only; the
+README used to claim macOS, and the installer now refuses clearly rather than
+installing a Linux binary that cannot run.
+
+**Does it need a Python toolchain?** No. The installers fetch a self-contained
+binary. Python 3.8+ is only needed to build from source or to write plugins.
+
+**Where is my data?** Everything is local: `~/.fenox.json` (devices, apps,
+groups), `~/.fenox/` (plugins, profiles, hooks), `~/.fenox-backups/`. Use
+`fenox profile export <name>` to move a setup between machines.
+
+**How do I pin a version?** Built from a clone, edit `VERSION`. On Windows,
+`install.ps1 -Version v1.0.0`. On Linux, install from a clone at that tag.
+
+**A device went offline and came back.** `fenox watch` re-binds reverse ports as
+soon as a device reconnects, and `fenox sync` reconnects known devices on demand.
+
+## 🤝 Contributing
+
+Bug reports, fixes and documentation are all welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions and how releases are
+cut, and [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
+
+Please report security problems privately via
+[SECURITY.md](SECURITY.md), and note that this project follows the
+[Contributor Covenant](CODE_OF_CONDUCT.md).

@@ -9,16 +9,42 @@
 #
 # Fast path  : download a prebuilt, checksum-verified binary from GitHub Releases
 # Fallback   : build from this repo's source with PyInstaller
+#
+# Supported: Linux (x86_64, aarch64) and WSL. For Windows use install.ps1 —
+# macOS is not supported.
 set -euo pipefail
 
 REPO="onefennox/fenox-mobile"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || pwd)"
 SRC="$REPO_DIR/src/fenox_mobile_source.py"
 BIN_DIR="$HOME/.local/bin"
+
+# --- platform guard -----------------------------------------------------------
+# Fenox ships prebuilt binaries for Linux (x86_64 + aarch64) and Windows. macOS
+# has no build, and the Linux binaries cannot run there, so refuse rather than
+# installing something that will not start.
+case "$(uname -s)" in
+  Linux) ;;
+  Darwin)
+    echo "❌ macOS is not supported — fenox ships Linux and Windows builds."
+    echo "   This is a Linux/WSL installer. On Windows, use PowerShell instead:"
+    echo "     irm https://raw.githubusercontent.com/$REPO/main/install.ps1 | iex"
+    exit 1 ;;
+  *)
+    echo "❌ Unsupported OS: $(uname -s) — fenox supports Linux, WSL and Windows."
+    exit 1 ;;
+esac
+
 ARCH="$(uname -m)"; [ "$ARCH" = "arm64" ] && ARCH="aarch64"
-[ "$ARCH" = "x86_64" ] || [ "$ARCH" = "aarch64" ] || { echo "❌ Unsupported arch: $ARCH"; exit 1; }
+[ "$ARCH" = "x86_64" ] || [ "$ARCH" = "aarch64" ] || { echo "❌ Unsupported arch: $ARCH (fenox ships x86_64 and aarch64)"; exit 1; }
 
 mkdir -p "$BIN_DIR"
+
+sha256_of() { # sha256_of <file> -> lowercase digest
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+  else echo "❌ Need sha256sum (or shasum) to verify the download." >&2; return 1; fi
+}
 
 fetch() { # fetch <url> <out>
   if command -v curl >/dev/null 2>&1; then curl -fsSL "$1" -o "$2"
@@ -95,7 +121,7 @@ if [ ! -f "$SRC" ]; then
   echo "📥 Downloading prebuilt $ASSET $TAG ..."
   fetch "$BASE/$ASSET" "$TMP/fenox-mobile" || { echo "❌ Download failed. Build from source instead: git clone https://github.com/$REPO.git"; rm -rf "$TMP"; exit 1; }
   EXPECTED="$(get_expected_sum "$TAG" "$ASSET")" || { echo "❌ No checksum file — refusing to install."; rm -rf "$TMP"; exit 1; }
-  actual="$(sha256sum "$TMP/fenox-mobile" | cut -d' ' -f1)"
+  actual="$(sha256_of "$TMP/fenox-mobile")" || { rm -rf "$TMP"; exit 1; }
   [ "$EXPECTED" = "$actual" ] || { echo "❌ Checksum mismatch — refusing to install."; rm -rf "$TMP"; exit 1; }
   install_binary "$TMP/fenox-mobile"
   rm -rf "$TMP"
@@ -114,7 +140,7 @@ if [ "${FENOX_BUILD_FROM_SOURCE:-0}" != "1" ] && [ "$FENOX_VERSION" != "dev" ]; 
   echo "📥 Downloading prebuilt $ASSET v$FENOX_VERSION ..."
   if fetch "$BASE/$ASSET" "$TMP/fenox-mobile"; then
     EXPECTED="$(get_expected_sum "v$FENOX_VERSION" "$ASSET")" || EXPECTED=""
-    actual="$(sha256sum "$TMP/fenox-mobile" | cut -d' ' -f1)"
+    actual="$(sha256_of "$TMP/fenox-mobile")" || actual=""
     if [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$actual" ]; then
       install_binary "$TMP/fenox-mobile"
       rm -rf "$TMP"

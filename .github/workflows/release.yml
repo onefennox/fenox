@@ -87,9 +87,52 @@ jobs:
       - name: End-to-end install test against the real artifact
         run: bash tests/test_release_e2e.sh release-bin/fenox-mobile-linux-x86_64
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate install.ps1 syntax
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host "install.ps1 parses cleanly"
+
+      - name: Build binary (windows-x86_64)
+        run: |
+          pip install pyinstaller rich
+          pyinstaller --onefile --name fenox-mobile `
+            --distpath dist/windows/x86_64 --workpath build --specpath ${{ runner.temp }} `
+            src/fenox_mobile_source.py
+
+      - name: Verify binary runs
+        run: dist/windows/x86_64/fenox-mobile.exe --version
+
+      - name: Rename with platform suffix + checksum
+        shell: pwsh
+        run: |
+          $dir = "dist/windows/x86_64"
+          $name = "fenox-mobile-windows-x86_64.exe"
+          Rename-Item "$dir/fenox-mobile.exe" $name
+          $hash = (Get-FileHash "$dir/$name" -Algorithm SHA256).Hash.ToLower()
+          # LF line endings, matching sha256sum output so SHA256SUMS stays consistent
+          [System.IO.File]::WriteAllText("$dir/$name.sha256", "$hash  $name`n")
+          Get-Content "$dir/$name.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fenox-mobile-windows-x86_64
+          path: dist/windows/x86_64/*
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, e2e]
+    needs: [build, e2e, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,7 +147,9 @@ jobs:
           cp artifacts/fenox-mobile-linux-x86_64/fenox-mobile-linux-x86_64.sha256 .
           cp artifacts/fenox-mobile-linux-aarch64/fenox-mobile-linux-aarch64 .
           cp artifacts/fenox-mobile-linux-aarch64/fenox-mobile-linux-aarch64.sha256 .
-          cat fenox-mobile-linux-*.sha256 > SHA256SUMS
+          cp artifacts/fenox-mobile-windows-x86_64/fenox-mobile-windows-x86_64.exe .
+          cp artifacts/fenox-mobile-windows-x86_64/fenox-mobile-windows-x86_64.exe.sha256 .
+          cat fenox-mobile-linux-*.sha256 fenox-mobile-windows-*.sha256 > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -115,4 +160,6 @@ jobs:
             fenox-mobile-linux-x86_64.sha256
             fenox-mobile-linux-aarch64
             fenox-mobile-linux-aarch64.sha256
+            fenox-mobile-windows-x86_64.exe
+            fenox-mobile-windows-x86_64.exe.sha256
             SHA256SUMS

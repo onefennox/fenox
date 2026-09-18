@@ -1,0 +1,92 @@
+name: Bug report
+description: Something in fenox is broken or behaves unexpectedly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The version, platform and `fenox doctor` output are
+        usually what we need to reproduce a problem — please fill them in.
+
+        **Security problems: do not open an issue.** Report them privately instead:
+        https://github.com/onefennox/fenox-mobile/security/advisories/new
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before filing
+      options:
+        - label: I am on the latest release (`fenox update`, or re-ran the installer)
+          required: true
+        - label: I searched the existing issues for this problem
+          required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you run, and what did you expect instead?
+      placeholder: |
+        I ran `fenox connect` and ...
+        I expected ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `...`
+        2. Connect a device over ...
+        3. See the error
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `fenox --version`
+      placeholder: fenox-mobile 1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - WSL
+        - Windows
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: fenox doctor output
+      description: Paste the full output of `fenox doctor` (it is safe to share).
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: device
+    attributes:
+      label: Device details
+      description: Phone model, Android version, and how it is connected (USB, wireless, emulator).
+      placeholder: |
+        Pixel 8, Android 15, wireless debugging
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Logs, screenshots, or context that might help.
+    validations:
+      required: false

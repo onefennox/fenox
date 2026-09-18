@@ -22,9 +22,11 @@ HISTORY_PATH = os.path.expanduser("~/.fenox_history.json")
 # server there. USB debugging works because only Windows can see USB.
 ADB_SERVER_PORT = 5038
 FENOX_VERSION = "1.0.0"
-KNOWN_COMMANDS = {"run", "bind", "connect", "rename", "logs", "nuke", "mirror", "screenshot", "record", "build", "doctor", "sync", "discover", "add-app", "scan", "backend", "hot", "install", "open", "pair", "pair-qr", "devices", "profile", "watch", "update", "groups", "init"}
-IS_WSL = os.path.exists("/proc/version") and ("microsoft" in open("/proc/version").read().lower() or bool(os.environ.get("WSL_DISTRO_NAME")))
+KNOWN_COMMANDS = {"run", "bind", "connect", "rename", "logs", "nuke", "mirror", "screenshot", "record", "build", "doctor", "sync", "discover", "add-app", "scan", "backend", "hot", "install", "open", "pair", "pair-qr", "devices", "profile", "watch", "update", "groups", "init", "uninstall"}
+IS_WINDOWS = sys.platform == "win32"
+IS_LINUX = sys.platform.startswith("linux")
 IS_MACOS = sys.platform == "darwin"
+IS_WSL = os.path.exists("/proc/version") and ("microsoft" in open("/proc/version").read().lower() or bool(os.environ.get("WSL_DISTRO_NAME")))
 
 def _win_user():
     """Best-effort Windows username (WSL only)."""
@@ -155,18 +157,17 @@ def ensure_output_dirs():
     for media_type, (wsl_dir, win_dir) in OUTPUT_DIRS.items():
         os.makedirs(wsl_dir, exist_ok=True)
 
+# A fresh install starts deliberately empty. Shipping sample apps and devices here
+# meant every new user was handed aliases (myapp-myphone, myapp-emulator, ...) that
+# pointed at projects and devices which do not exist on their machine. `fenox init`
+# collects the settings, `fenox scan`/`doctor` discover the rest.
 DEFAULT_CONFIG = {
-    "apps": {
-        "myapp": {"path": "~/Projects/MyApp", "port": "4000", "api_local": "http://localhost:4000", "api_remote": "https://myapp.example.com", "backend": {"path": "~/Projects/MyApp/server", "cmd": "npm run dev"}}
-    },
+    "apps": {},
+    "devices": {},
     "settings": {
-        "remote_domain": "example.com",
-        "projects_dir": "~/Projects"
+        "remote_domain": "",
+        "projects_dir": "",
     },
-    "devices": {
-        "myphone": {"ip": "192.168.1.20", "model": "Android Device", "port": "5555"},
-        "emulator": {"type": "emulator", "model": "Android Emulator", "port": "5554"}
-    }
 }
 
 def merge_defaults(base, incoming):
@@ -280,6 +281,39 @@ def resolve_package(app_key):
 config = load_config()
 APPS = config.get("apps", {})
 DEVICES = config.get("devices", {})
+
+def get_projects_dir():
+    """Where this machine keeps its Flutter projects.
+
+    Returns the directory chosen during `fenox init`, or the first conventional
+    location that actually exists — never a path that is merely assumed.
+    """
+    raw = str(config.get("settings", {}).get("projects_dir") or "").strip()
+    if raw:
+        return os.path.expanduser(raw)
+    for candidate in ("~/Projects", "~/projects", "~/code", "~/src", "~/dev"):
+        path = os.path.expanduser(candidate)
+        if os.path.isdir(path):
+            return path
+    return os.path.expanduser("~/Projects")
+
+def _ask(prompt, default=""):
+    """Prompt for input only when a human is attached; otherwise take the default."""
+    if not sys.stdin.isatty():
+        return default
+    try:
+        return Prompt.ask(prompt, default=default)
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+def _confirm(prompt, default=True):
+    """Confirm only when a human is attached; non-interactive runs answer 'no'."""
+    if not sys.stdin.isatty():
+        return False
+    try:
+        return Confirm.ask(prompt, default=default)
+    except (EOFError, KeyboardInterrupt):
+        return default
 
 def run_cmd(cmd, timeout=None):
     try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
@@ -953,11 +987,170 @@ def action_groups(action=None, name=None, members=None):
     else:
         console.print("[red]Usage: fenox-mobile groups [list|add|remove] ...[/red]")
 
-def action_init():
-    """First-run setup: environment check, tool detection, alias engine, next steps."""
+def setup_settings(force=False):
+    """The one-time questions: where projects live, and the remote API domain.
+
+    Answers are written to ~/.fenox.json, so they are asked once per machine
+    (or again with `fenox init --reset-settings`).
+    """
+    settings = config.setdefault("settings", {})
+    changed = False
+
+    unset = (not str(settings.get("projects_dir") or "").strip()
+             or not str(settings.get("remote_domain") or "").strip())
+    if (force or unset) and not sys.stdin.isatty():
+        console.print()
+        console.print("[yellow]⚠️  One-time setup needs an interactive terminal.[/yellow]")
+        console.print("[dim]Run [cyan]fenox init[/cyan] from a terminal to choose your projects directory "
+                      "and remote API domain — until then fenox falls back to "
+                      f"[cyan]{get_projects_dir()}[/cyan].[/dim]")
+        return False
+
+    if force or not str(settings.get("projects_dir") or "").strip():
+        console.print()
+        console.print("[bold]1/2 · Where do your Flutter projects live?[/bold]")
+        console.print("[dim]Fenox scans this directory to register projects and offers it as the "
+                      "default path when adding one.[/dim]")
+        answer = _ask("Projects directory", default=settings.get("projects_dir") or get_projects_dir())
+        path = os.path.expanduser(str(answer or "").strip())
+        while path and not os.path.isdir(path) and _confirm(f"{path} does not exist yet. Create it?", default=True):
+            try:
+                os.makedirs(path, exist_ok=True)
+                console.print(f"[green]✅ Created {path}[/green]")
+            except OSError as e:
+                console.print(f"[red]❌ Could not create {path}: {e}[/red]")
+                break
+        if path and os.path.isdir(path):
+            settings["projects_dir"] = path
+            changed = True
+            console.print(f"[green]✅ Projects directory:[/green] {path}")
+        else:
+            console.print("[yellow]⚠️  Not a directory — keeping the current setting.[/yellow]")
+
+    if force or not str(settings.get("remote_domain") or "").strip():
+        console.print()
+        console.print("[bold]2/2 · Remote API domain (optional)[/bold]")
+        console.print("[dim]Guesses production URLs as https://<app>.<domain>/api. Press Enter to skip.[/dim]")
+        answer = str(_ask("Your domain, e.g. example.com", default=settings.get("remote_domain") or "") or "")
+        answer = answer.replace("https://", "").replace("http://", "").strip().strip("/")
+        if answer:
+            settings["remote_domain"] = answer
+            changed = True
+            console.print(f"[green]✅ Remote domain:[/green] {answer}")
+        else:
+            console.print("[dim]Skipped — fenox will ask for a URL when a remote launch or "
+                          "release build needs one.[/dim]")
+
+    if changed:
+        save_config()
+    return changed
+
+def action_uninstall(args=None):
+    """Remove fenox: shell hooks, config, backups and the installed binary."""
+    assume_yes = bool(getattr(args, "yes", False))
+    keep_config = bool(getattr(args, "keep_config", False))
+    console.print(Panel.fit("[bold red]🗑️  FENOX UNINSTALL[/bold red]", border_style="red"))
+    console.print("[dim]This removes fenox from this machine. Nothing is sent anywhere.[/dim]")
+
+    frozen = bool(getattr(sys, "frozen", False))
+    self_path = os.path.realpath(sys.executable if frozen else __file__)
+    targets = []
+    if frozen:
+        targets.append(("Binary", self_path))
+        link = os.path.join(os.path.dirname(self_path), "fenox")
+        if os.path.islink(link) and os.path.realpath(link) == self_path:
+            targets.append(("'fenox' symlink", link))
+    else:
+        # Running from a checkout: never delete the repo we were launched from,
+        # only genuine installs in the standard locations.
+        console.print(f"[dim]Running from source ({self_path}) — that file is left alone.[/dim]")
+        for candidate in (os.path.expanduser("~/.local/bin/fenox-mobile"), "/usr/local/bin/fenox-mobile"):
+            if not os.path.exists(candidate) or os.path.realpath(candidate) == self_path:
+                continue
+            targets.append(("Installed binary", candidate))
+            link = os.path.join(os.path.dirname(candidate), "fenox")
+            if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(candidate):
+                targets.append(("'fenox' symlink", link))
+    if not keep_config:
+        targets += [("Config", CONFIG_PATH),
+                    ("Run history", HISTORY_PATH),
+                    ("Config backups", os.path.expanduser("~/.fenox-backups")),
+                    ("Plugins, hooks, profiles", os.path.expanduser("~/.fenox"))]
+
+    if not targets:
+        console.print("[dim]Nothing to remove — no install, config or shell hooks found.[/dim]")
+        return
+
+    table = Table(box=box.ROUNDED, show_header=True)
+    table.add_column("Remove", style="cyan", no_wrap=True)
+    table.add_column("Path")
+    for what, path in targets:
+        table.add_row(what, path)
+    console.print(table)
+
+    hooks = []
+    for rc in (os.path.expanduser("~/.bashrc"), os.path.expanduser("~/.zshrc")):
+        try:
+            if os.path.exists(rc) and "# fenox-mobile" in open(rc, encoding="utf-8", errors="ignore").read():
+                hooks.append(rc)
+        except OSError:
+            pass
+    if hooks:
+        console.print("[cyan]Shell hooks to strip:[/cyan] " + ", ".join(hooks))
+    if keep_config:
+        console.print("[dim]--keep-config: your ~/.fenox.json is left in place.[/dim]")
+
+    console.print()
+    if not assume_yes and not _confirm("Proceed with removal?", default=False):
+        console.print("[dim]Cancelled — nothing was removed.[/dim]")
+        return
+
+    removed, failed = 0, []
+    for _, path in targets:
+        if not os.path.exists(path) and not os.path.islink(path):
+            continue
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            removed += 1
+            console.print(f"[green]✅ Removed[/green] {path}")
+        except OSError as e:
+            failed.append(f"{path} ({e})")
+
+    for rc in hooks:
+        try:
+            lines = open(rc, encoding="utf-8", errors="ignore").read().splitlines(keepends=True)
+            kept, skip_next = [], False
+            for line in lines:
+                if skip_next:
+                    skip_next = False
+                    # Drop the line under the marker only if it really is ours.
+                    if "fenox" in line:
+                        continue
+                if line.lstrip().startswith("# fenox-mobile"):
+                    skip_next = True
+                    continue
+                kept.append(line)
+            if len(kept) != len(lines):
+                with open(rc, "w", encoding="utf-8") as f:
+                    f.writelines(kept)
+                console.print(f"[green]✅ Cleaned shell hooks from[/green] {rc}")
+        except OSError as e:
+            failed.append(f"{rc} ({e})")
+
+    console.print()
+    console.print(f"[green]✅ fenox removed ({removed} path(s)).[/green]")
+    for f in failed:
+        console.print(f"[yellow]⚠️  Could not remove {f}[/yellow]")
+    console.print("[dim]Open a new terminal (or run 'hash -r') so the shell hooks take effect.[/dim]")
+
+def action_init(reset=False):
+    """One-time setup: environment report, project directory, alias engine, next steps."""
     import platform as _pf
-    console.print(Panel.fit("[bold cyan]🚀 FENOX INIT — environment setup[/bold cyan]", border_style="cyan"))
-    plat = "WSL" if IS_WSL else ("macOS" if IS_MACOS else "Linux")
+    console.print(Panel.fit("[bold cyan]🚀 FENOX INIT — one-time setup[/bold cyan]", border_style="cyan"))
+    plat = "Windows" if IS_WINDOWS else ("WSL" if IS_WSL else ("macOS" if IS_MACOS else "Linux"))
     t = Table(box=box.ROUNDED, show_header=False)
     t.add_column("Key", style="cyan", no_wrap=True)
     t.add_column("Value")
@@ -975,14 +1168,30 @@ def action_init():
     tt = Table(title="Tool Check", box=box.ROUNDED)
     tt.add_column("Tool"); tt.add_column("Purpose"); tt.add_column("Status"); tt.add_column("Path")
     missing = []
-    hints = {"adb": "sudo apt install adb (or Android platform-tools)",
-             "scrcpy": "sudo apt install scrcpy",
-             "tmux": "sudo apt install tmux",
-             "flutter": "see https://docs.flutter.dev/get-started/install"}
+    if IS_WINDOWS:
+        hints = {"adb": "install Android platform-tools and add adb.exe to your PATH",
+                 "scrcpy": "winget install Genymobile.scrcpy",
+                 "tmux": "not available on Windows — blast deploys run one device at a time",
+                 "flutter": "see https://docs.flutter.dev/get-started/install/windows"}
+        optional = {"tmux"}
+    elif IS_MACOS:
+        hints = {"adb": "brew install android-platform-tools",
+                 "scrcpy": "brew install scrcpy",
+                 "tmux": "brew install tmux",
+                 "flutter": "see https://docs.flutter.dev/get-started/install/macos"}
+        optional = set()
+    else:
+        hints = {"adb": "sudo apt install adb (or Android platform-tools)",
+                 "scrcpy": "sudo apt install scrcpy",
+                 "tmux": "sudo apt install tmux",
+                 "flutter": "see https://docs.flutter.dev/get-started/install/linux"}
+        optional = set()
     for name, what in tools:
         path = shutil.which(name) or shutil.which(name + ".exe")
         if path:
             tt.add_row(name, what, "[green]✅[/green]", path)
+        elif name in optional:
+            tt.add_row(name, what, "[yellow]optional[/yellow]", "not found")
         else:
             tt.add_row(name, what, "[red]❌[/red]", "not found")
             missing.append(name)
@@ -990,22 +1199,42 @@ def action_init():
     for m in missing:
         console.print(f"   [yellow]• {m}:[/yellow] {hints.get(m, 'install it and re-run fenox init')}")
 
-    shell = os.path.basename(os.environ.get("SHELL", "bash"))
-    rcfile = "~/.zshrc" if "zsh" in shell else "~/.bashrc"
-    rc_path = os.path.expanduser(rcfile)
-    alias_line = 'eval "$(fenox --generate-aliases)"'
-    already = os.path.exists(rc_path) and alias_line in open(rc_path, encoding="utf-8", errors="ignore").read()
-    console.print()
-    if already:
-        console.print(f"[green]✅ Alias engine already installed in {rcfile}[/green]")
-    else:
-        console.print(f"[cyan]Add the auto-alias engine to {rcfile}?[/cyan] [dim](generates <app>-<device> launch aliases)[/dim]")
-        if Confirm.ask("Append now", default=True):
-            with open(rc_path, "a", encoding="utf-8") as f:
-                f.write(f"\n# fenox-mobile aliases\n{alias_line}\n")
-            console.print(f"[green]✅ Added. Run:[/green] source {rcfile}  [dim](or open a new terminal)[/dim]")
-        else:
-            console.print(f"[dim]No problem — add it anytime: echo '{alias_line}' >> {rcfile}[/dim]")
+    # --- the one-time questions -------------------------------------------------
+    setup_settings(force=reset)
+
+    # --- shell integration ------------------------------------------------------
+    if IS_WINDOWS:
+        console.print()
+        console.print("[dim]Windows: aliases and completions are a bash/zsh feature. Run fenox from "
+                      "PowerShell, or use the raw CLI commands (fenox-mobile run <app> <device>).[/dim]")
+    elif sys.stdin.isatty():
+        shell = os.path.basename(os.environ.get("SHELL", "bash"))
+        rcfile = "~/.zshrc" if "zsh" in shell else "~/.bashrc"
+        rc_path = os.path.expanduser(rcfile)
+        comp_shell = "zsh" if "zsh" in shell else "bash"
+        hooks = (("auto-alias engine", 'eval "$(fenox --generate-aliases)"'),
+                 ("shell completions", f'eval "$(fenox --generate-completions {comp_shell})"'))
+        for label, line in hooks:
+            console.print()
+            installed = os.path.exists(rc_path) and line in open(rc_path, encoding="utf-8", errors="ignore").read()
+            if installed:
+                console.print(f"[green]✅ {label.capitalize()} already installed in {rcfile}[/green]")
+                continue
+            console.print(f"[cyan]Add the {label} to {rcfile}?[/cyan]")
+            if _confirm(f"Append {label} now", default=True):
+                with open(rc_path, "a", encoding="utf-8") as f:
+                    f.write(f"\n# fenox-mobile {label}\n{line}\n")
+                console.print(f"[green]✅ Added.[/green] [dim]Run:[/dim] source {rcfile} "
+                              "[dim](or open a new terminal)[/dim]")
+            else:
+                console.print(f"[dim]Skipped — add it anytime: echo '{line}' >> {rcfile}[/dim]")
+
+    # --- offer to find projects straight away -----------------------------------
+    projects_dir = get_projects_dir()
+    if os.path.isdir(projects_dir):
+        console.print()
+        if _confirm(f"Scan {projects_dir} for Flutter projects now?", default=True):
+            action_scan()
 
     console.print()
     console.print("[bold]Next steps:[/bold]")
@@ -1014,6 +1243,7 @@ def action_init():
     console.print("  [cyan]fenox scan[/cyan]           auto-register Flutter projects")
     console.print("  [cyan]fenox doctor[/cyan]         health-check everything")
     console.print("  [cyan]fenox profile import <name>[/cyan]  restore a setup from another machine")
+    console.print("  [cyan]fenox uninstall[/cyan]      remove fenox, its config and its shell hooks")
 
 def generate_completions(shell):
     """Print shell completion script (bash or zsh) for fenox commands."""
@@ -1574,7 +1804,7 @@ def action_run(app_key, dev_key, is_remote):
         args.append(f"--dart-define=API_BASE_URL={app_data['api_local']}")
         if "socket_local" in app_data: args.append(f"--dart-define=SOCKET_BASE_URL={app_data['socket_local']}")
     else:
-        args.append(f"--dart-define=API_BASE_URL={app_data['api_remote']}")
+        args.append(f"--dart-define=API_BASE_URL={_remote_api(app_data)}")
         if "socket_remote" in app_data: args.append(f"--dart-define=SOCKET_BASE_URL={app_data['socket_remote']}")
         
     cmd = ["flutter", "run", "-d", dev_id] + args
@@ -1586,7 +1816,15 @@ def action_run(app_key, dev_key, is_remote):
 def action_build(app_key):
     if app_key not in APPS: return
     app_data = APPS[app_key]
-    args = [f"--dart-define=API_BASE_URL={app_data['api_remote']}"]
+    remote_api = str(app_data.get("api_remote") or "").strip()
+    if not remote_api:
+        console.print(f"[red]❌ No remote API URL configured for '{app_key}' — refusing to build a "
+                      "release APK that points at nothing.[/red]")
+        console.print(f"[dim]Set settings.remote_domain with [cyan]fenox init[/cyan], or re-register: "
+                      f"[cyan]fenox add-app --name {app_key} --api-remote https://api.example.com "
+                      "--update --yes[/cyan][/dim]")
+        return
+    args = [f"--dart-define=API_BASE_URL={remote_api}"]
     if "socket_remote" in app_data: args.append(f"--dart-define=SOCKET_BASE_URL={app_data['socket_remote']}")
     cmd = ["flutter", "build", "apk", "--release"] + args
     console.print(f"\n[green bold]📦 Building Release APK for {app_key.upper()}...[/green bold]")
@@ -2931,12 +3169,25 @@ def _guess_backend_cmd(backend_path):
     return None
 
 def _guess_remote(app_name):
-    domain = config.get("settings", {}).get("remote_domain", "example.com")
+    """https://<app>.<remote_domain>/api, or empty when no domain has been configured."""
+    domain = str(config.get("settings", {}).get("remote_domain") or "").strip()
+    if not domain or domain == "example.com":   # placeholder from older configs
+        return ""
     return f"https://{app_name}.{domain}/api"
 
+def _remote_api(app_data):
+    """Remote API URL for a launch; falls back to the local URL, loudly, when unset."""
+    remote = str(app_data.get("api_remote") or "").strip()
+    if remote:
+        return remote
+    console.print("[yellow]⚠️  No remote API URL configured for this app — using the local one.[/yellow]")
+    console.print("[dim]Set settings.remote_domain with [cyan]fenox init[/cyan], or re-register: "
+                  "[cyan]fenox add-app --api-remote https://api.example.com --update --yes[/cyan][/dim]")
+    return app_data.get("api_local", "")
+
 def _locate_project(app_name):
-    """Find a Flutter project in ~/Projects whose repo/dir name matches the alias."""
-    base = os.path.expanduser(config.get("settings", {}).get("projects_dir", "~/Projects"))
+    """Find a Flutter project in your projects directory whose repo/dir name matches the alias."""
+    base = get_projects_dir()
     target = re.sub(r"[^a-z0-9]", "", app_name.lower())
     if not target or not os.path.isdir(base):
         return None
@@ -2996,7 +3247,9 @@ def _build_entry(name, path, port=None, api_local=None, api_remote=None, socket_
         api_local = f"http://localhost:{port}/api"
     if not api_remote:
         api_remote = _guess_remote(name)
-    entry = {"path": path, "port": port, "api_local": api_local, "api_remote": api_remote}
+    entry = {"path": path, "port": port, "api_local": api_local}
+    if api_remote:
+        entry["api_remote"] = api_remote
     if socket_local:
         entry["socket_local"] = socket_local
     if socket_remote:
@@ -3070,7 +3323,7 @@ def _add_app_wizard():
     name = _sanitize_name(Prompt.ask("App name (alias)", default="newapp"))
     if name in APPS:
         console.print(f"[red]❌ App '{name}' already exists.[/red]"); return
-    path_default = _locate_project(name) or f"~/Projects/{name}"
+    path_default = _locate_project(name) or os.path.join(get_projects_dir(), name)
     path = Prompt.ask("Project path", default=path_default)
     backend_dir = _find_backend_dir(name, path)
     detected = _detect_port(backend_dir) if backend_dir else None
@@ -3100,10 +3353,10 @@ def _add_app_wizard():
     _print_app_summary(name, entry)
 
 def action_scan(args=None):
-    """Zero-friction: register every new Flutter project found under ~/Projects. No prompts."""
+    """Zero-friction: register every new Flutter project under your projects directory. No prompts."""
     dry_run = bool(getattr(args, "dry_run", False))
-    console.print(Panel.fit("[bold green]🔎 AUTO-REGISTER FLUTTER APPS FROM ~/Projects[/bold green]", border_style="green"))
-    base = os.path.expanduser(config.get("settings", {}).get("projects_dir", "~/Projects"))
+    base = get_projects_dir()
+    console.print(Panel.fit(f"[bold green]🔎 REGISTER FLUTTER APPS FROM {base}[/bold green]", border_style="green"))
     if not os.path.isdir(base):
         console.print(f"[red]❌ {base} not found.[/red]"); return
     candidates = []
@@ -3385,7 +3638,11 @@ if __name__ == "__main__":
     parser_watch = subparsers.add_parser("watch", help="Auto-rebind reverse ports on device (re)plug")
     parser_watch.add_argument("--interval", type=int, default=3)
     subparsers.add_parser("update", help="Self-update fenox from the installer script")
-    subparsers.add_parser("init", help="First-run setup: environment check, tools, alias engine")
+    parser_init = subparsers.add_parser("init", help="One-time setup: environment, project directory, shell hooks")
+    parser_init.add_argument("--reset-settings", action="store_true", help="Ask the one-time questions again")
+    parser_uninstall = subparsers.add_parser("uninstall", help="Remove fenox, its config and its shell hooks")
+    parser_uninstall.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
+    parser_uninstall.add_argument("--keep-config", action="store_true", help="Leave ~/.fenox.json in place")
     parser_groups = subparsers.add_parser("groups", help="Manage device groups (use as @name in run)")
     parser_groups.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove"])
     parser_groups.add_argument("name", nargs="?")
@@ -3438,7 +3695,8 @@ def _dispatch(args):
     elif args.command == "watch": action_watch(interval=args.interval)
     elif args.command == "update": action_update()
     elif args.command == "groups": action_groups(args.action, args.name, args.members)
-    elif args.command == "init": action_init()
+    elif args.command == "init": action_init(reset=args.reset_settings)
+    elif args.command == "uninstall": action_uninstall(args)
     elif args.command == "build": action_build(args.app)
     elif args.command == "mirror": action_mirror(args.device)
     elif args.command == "screenshot": action_media(args.device, "screenshot")

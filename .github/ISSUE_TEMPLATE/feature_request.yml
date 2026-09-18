@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest an idea or improvement for fenox
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem you are trying to solve. Proposals that explain the
+        problem, rather than only the solution, are much easier to act on.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: What is annoying, missing or slow today?
+      placeholder: |
+        When I have several devices connected there is no way to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like fenox to do?
+      description: Your suggested approach, including the command you would expect to run.
+      placeholder: |
+        `fenox foo --bar` should ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have considered
+      description: Existing commands, workarounds, or other tools.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which platform does this matter on?
+      options:
+        - All platforms
+        - Linux
+        - WSL
+        - Windows
+    validations:
+      required: true
