@@ -2090,14 +2090,15 @@ try:
 except ImportError:
     _msvcrt = None
 
-_ESCAPE_KEYS = {"\x1b[A": "UP", "\x1b[B": "DOWN", "\x1b[C": "RIGHT", "\x1b[D": "LEFT"}
-_WIN_ARROWS = {"H": "UP", "P": "DOWN", "K": "LEFT", "M": "RIGHT"}
+# Names are lowercase so they can be compared against option and back keys directly.
+_ESCAPE_KEYS = {"\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left"}
+_WIN_ARROWS = {"H": "up", "P": "down", "K": "left", "M": "right"}
 
 def _read_key(timeout=None):
     """Read one keypress without waiting for Enter.
 
-    Returns a single lowercased character, or one of UP/DOWN/LEFT/RIGHT/ESC/
-    ENTER/BACKSPACE. Returns None on timeout, or immediately when stdin is not an
+    Returns a single lowercased character, or one of up/down/left/right/esc/
+    enter/backspace. Returns None on timeout, or immediately when stdin is not an
     interactive terminal.
     """
     if not sys.stdin.isatty():
@@ -2110,9 +2111,9 @@ def _read_key(timeout=None):
                 ch = _msvcrt.getwch()
                 if ch in ("\x00", "\xe0"):     # arrow / function key prefix
                     return _WIN_ARROWS.get(_msvcrt.getwch(), "")
-                if ch == "\r": return "ENTER"
-                if ch == "\x1b": return "ESC"
-                if ch == "\x08": return "BACKSPACE"
+                if ch == "\r": return "enter"
+                if ch == "\x1b": return "esc"
+                if ch == "\x08": return "backspace"
                 if ch == "\x03": raise KeyboardInterrupt
                 return ch.lower()
             if deadline is not None and time.monotonic() >= deadline:
@@ -2138,10 +2139,10 @@ def _read_key(timeout=None):
         ready, _, _ = select.select([sys.stdin], [], [], 0.02)
         if ready:
             rest = sys.stdin.read(2)
-            return _ESCAPE_KEYS.get("\x1b" + rest, "ESC")
-        return "ESC"
-    if ch in ("\r", "\n"): return "ENTER"
-    if ch in ("\x7f", "\x08"): return "BACKSPACE"
+            return _ESCAPE_KEYS.get("\x1b" + rest, "esc")
+        return "esc"
+    if ch in ("\r", "\n"): return "enter"
+    if ch in ("\x7f", "\x08"): return "backspace"
     if ch == "\x03": raise KeyboardInterrupt
     return ch.lower()
 
