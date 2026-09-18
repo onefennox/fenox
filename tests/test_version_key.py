@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the version-comparison helper used by `fenox update`.
 
-The helper is loaded straight out of src/fenox_mobile_source.py, so the shipped
+The helper is loaded straight out of src/fenox.py, so the shipped
 implementation is what runs (importing the module would execute the CLI).
 
 Regression guard: comparing version strings directly made '2.9.0' look newer
@@ -11,11 +11,11 @@ of downloading the newer release.
 import pathlib
 import sys
 
-SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "fenox_mobile_source.py"
+SRC = pathlib.Path(__file__).resolve().parent.parent / "src" / "fenox.py"
 
 chunks = [c for c in SRC.read_text().split("\ndef ") if c.startswith("_ver_key(")]
 if not chunks:
-    print("❌ _ver_key not found in src/fenox_mobile_source.py")
+    print("❌ _ver_key not found in src/fenox.py")
     sys.exit(1)
 
 ns: dict = {}

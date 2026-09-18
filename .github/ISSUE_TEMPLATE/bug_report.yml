@@ -9,7 +9,7 @@ body:
         usually what we need to reproduce a problem — please fill them in.
 
         **Security problems: do not open an issue.** Report them privately instead:
-        https://github.com/onefennox/fenox-mobile/security/advisories/new
+        https://github.com/onefennox/fenox/security/advisories/new
 
   - type: checkboxes
     id: preflight
@@ -48,7 +48,7 @@ body:
     attributes:
       label: Version
       description: Output of `fenox --version`
-      placeholder: fenox-mobile 1.0.0
+      placeholder: fenox 1.0.1
     validations:
       required: true
 
@@ -56,10 +56,10 @@ body:
     id: platform
     attributes:
       label: Platform
+      description: Native Windows and macOS are not supported — on Windows, fenox runs inside WSL.
       options:
         - Linux
         - WSL
-        - Windows
         - Other (describe below)
     validations:
       required: true

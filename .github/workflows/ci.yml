@@ -19,15 +19,24 @@ jobs:
         run: pip install rich
 
       - name: Compile check
-        run: python -m py_compile src/fenox_mobile_source.py
+        run: python -m py_compile src/fenox.py
 
       - name: CLI smoke tests (no device required)
         run: |
-          python src/fenox_mobile_source.py --help
-          python src/fenox_mobile_source.py --version
-          python src/fenox_mobile_source.py devices --json < /dev/null | python -c "import json,sys; d=json.load(sys.stdin); assert 'devices' in d"
-          python src/fenox_mobile_source.py groups < /dev/null
-          python src/fenox_mobile_source.py profile list < /dev/null
+          python src/fenox.py --help
+          python src/fenox.py --version
+          python src/fenox.py devices --json < /dev/null | python -c "import json,sys; d=json.load(sys.stdin); assert 'devices' in d"
+          python src/fenox.py groups < /dev/null
+          python src/fenox.py profile list < /dev/null
+
+      - name: Session UI tests (boot screen, sign-off, keypresses over a pty)
+        run: python tests/test_session_ui.py
+
+      - name: Menu wiring tests (every menu key runs what it advertises)
+        run: python tests/test_menu_wiring.py
+
+      - name: Phone data tests (content-provider parsing, no device needed)
+        run: python tests/test_phone_content.py
 
       - name: Installer checks (syntax + checksum resolution)
         run: |
@@ -39,7 +48,7 @@ jobs:
 
       - name: Version consistency check
         run: |
-          SRC_VER=$(grep -oP 'FENOX_VERSION = "\K[^"]+' src/fenox_mobile_source.py)
+          SRC_VER=$(grep -oP 'FENOX_VERSION = "\K[^"]+' src/fenox.py)
           FILE_VER=$(cat VERSION)
           [ "$SRC_VER" = "$FILE_VER" ] || { echo "❌ VERSION ($FILE_VER) != source ($SRC_VER)"; exit 1; }
           echo "✅ v$SRC_VER"

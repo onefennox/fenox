@@ -44,6 +44,5 @@ body:
         - All platforms
         - Linux
         - WSL
-        - Windows
     validations:
       required: true

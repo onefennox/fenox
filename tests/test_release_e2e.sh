@@ -2,13 +2,13 @@
 # End-to-end test of the release -> install path, with no GitHub involved.
 #
 # Usage:
-#   tests/test_release_e2e.sh /path/to/fenox-mobile
+#   tests/test_release_e2e.sh /path/to/fenox
 #
 # Build a binary the way .github/workflows/release.yml does, then point this at it:
 #   pip install pyinstaller rich
-#   pyinstaller --onefile --name fenox-mobile --distpath dist --workpath /tmp \
-#     --specpath /tmp src/fenox_mobile_source.py
-#   tests/test_release_e2e.sh dist/fenox-mobile
+#   pyinstaller --onefile --name fenox --distpath dist --workpath /tmp \
+#     --specpath /tmp src/fenox.py
+#   tests/test_release_e2e.sh dist/fenox
 #
 # The test stages a real release layout (binary + .sha256 + SHA256SUMS), serves it
 # over loopback HTTP, rewrites install.sh's GitHub URLs at that server, and then
@@ -22,7 +22,7 @@ INSTALL_SH="$HERE/../install.sh"
 BINARY="${1:-${FENOX_TEST_BINARY:-}}"
 
 if [ -z "$BINARY" ] || [ ! -f "$BINARY" ]; then
-  echo "usage: $0 /path/to/fenox-mobile   (see header for how to build it)" >&2
+  echo "usage: $0 /path/to/fenox   (see header for how to build it)" >&2
   exit 2
 fi
 if [ ! -f "$INSTALL_SH" ]; then
@@ -33,8 +33,8 @@ fi
 ARCH="$(uname -m)"; [ "$ARCH" = "arm64" ] && ARCH="aarch64"
 case "$ARCH" in x86_64|aarch64) ;; *) echo "❌ unsupported arch: $ARCH" >&2; exit 2 ;; esac
 OTHER_ARCH=$([ "$ARCH" = "x86_64" ] && echo aarch64 || echo x86_64)
-ASSET="fenox-mobile-linux-$ARCH"
-TAG="v1.0.0"
+ASSET="fenox-linux-$ARCH"
+TAG="v1.0.1"
 
 T="$(mktemp -d)"
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
@@ -53,9 +53,9 @@ SERVE="$T/serve"
 REL="$SERVE/download/$TAG"
 mkdir -p "$REL" "$SERVE/releases"
 cp "$BINARY" "$REL/$ASSET"
-cp "$BINARY" "$REL/fenox-mobile-linux-$OTHER_ARCH"   # decoy: must never be selected
-( cd "$REL" && for a in fenox-mobile-linux-*; do sha256sum "$a" > "$a.sha256"; done
-             cat fenox-mobile-linux-*.sha256 > SHA256SUMS )
+cp "$BINARY" "$REL/fenox-linux-$OTHER_ARCH"   # decoy: must never be selected
+( cd "$REL" && for a in fenox-linux-*; do sha256sum "$a" > "$a.sha256"; done
+             cat fenox-linux-*.sha256 > SHA256SUMS )
 printf '{"tag_name": "%s"}\n' "$TAG" > "$SERVE/releases/latest.json"
 GOOD_SUM="$(cut -d' ' -f1 < "$REL/$ASSET.sha256")"
 
@@ -92,15 +92,15 @@ run_mode_b() { # run_mode_b <home>
 mk_install_copy "$T/install-a.sh"
 mkdir -p "$T/clone/src"
 mk_install_copy "$T/clone/install-b.sh"
-printf '1.0.0\n' > "$T/clone/VERSION"
-cp "$HERE/../src/fenox_mobile_source.py" "$T/clone/src/"
+printf '1.0.1\n' > "$T/clone/VERSION"
+cp "$HERE/../src/fenox.py" "$T/clone/src/"
 
 assert_installed() { # assert_installed <desc> <home>
   local desc="$1" home="$2" got
-  got="$(sha256sum "$home/.local/bin/fenox-mobile" 2>/dev/null | cut -d' ' -f1)"
+  got="$(sha256sum "$home/.local/bin/fenox" 2>/dev/null | cut -d' ' -f1)"
   check "$desc: binary installed with the published digest" "$GOOD_SUM" "$got"
-  check "$desc: fenox symlink resolves" "$home/.local/bin/fenox-mobile" "$(readlink -f "$home/.local/bin/fenox" 2>/dev/null)"
-  if HOME="$home" "$home/.local/bin/fenox-mobile" --version >/dev/null 2>&1; then
+  check "$desc: fenox symlink resolves" "$home/.local/bin/fenox" "$(readlink -f "$home/.local/bin/fenox" 2>/dev/null)"
+  if HOME="$home" "$home/.local/bin/fenox" --version >/dev/null 2>&1; then
     check "$desc: installed binary runs" "0" "0"
   else
     check "$desc: installed binary runs" "0" "nonzero"
@@ -137,7 +137,7 @@ printf 'tampered' >> "$REL/$ASSET"
 mkdir -p "$T/home-t"
 run_mode_a "$T/home-t"; rc=$?
 check "tampered download is refused" "1" "$rc"
-check "tampered binary was NOT installed" "" "$(ls "$T/home-t/.local/bin/fenox-mobile" 2>/dev/null)"
+check "tampered binary was NOT installed" "" "$(ls "$T/home-t/.local/bin/fenox" 2>/dev/null)"
 grep -qi 'checksum mismatch' "$T/modeA.log" && check "log explains the refusal" "0" "0" \
   || check "log explains the refusal" "0" "$(tail -1 "$T/modeA.log")"
 

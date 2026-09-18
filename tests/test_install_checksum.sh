@@ -10,7 +10,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_SH="$HERE/../install.sh"
-ASSET="fenox-mobile-linux-x86_64"
+ASSET="fenox-linux-x86_64"
 TAG="v9.9.9"
 
 TMPROOT="$(mktemp -d)"
@@ -71,7 +71,7 @@ echo "installer checksum resolution"
 
 # 1. The aggregate SHA256SUMS is preferred and matched exactly.
 fixtures exact
-printf '%s  fenox-mobile-linux-aarch64\n%s  %s\n' "$(digest c)" "$SUM_SUMS" "$ASSET" > "$FIXTURES/SHA256SUMS"
+printf '%s  fenox-linux-aarch64\n%s  %s\n' "$(digest c)" "$SUM_SUMS" "$ASSET" > "$FIXTURES/SHA256SUMS"
 printf '%s  %s\n' "$SUM_FILE" "$ASSET" > "$FIXTURES/$ASSET.sha256"
 run "SHA256SUMS preferred over .sha256" 0 "$SUM_SUMS"
 
@@ -82,7 +82,7 @@ run "binary-mode '*' marker accepted" 0 "$SUM_SUMS"
 
 # 3. A SHA256SUMS entry for another architecture must never match.
 fixtures wrong_arch
-printf '%s  fenox-mobile-linux-aarch64\n' "$(digest c)" > "$FIXTURES/SHA256SUMS"
+printf '%s  fenox-linux-aarch64\n' "$(digest c)" > "$FIXTURES/SHA256SUMS"
 run "other architecture ignored" 1 ""
 
 # 4. A "<asset>.sha256" entry is not the asset itself — exact matching only.

@@ -16,7 +16,7 @@ run `fenox update` (or re-run the installer) to get current.
 
 Use GitHub's private vulnerability reporting on this repository:
 **Security → Report a vulnerability** (or go straight to
-<https://github.com/onefennox/fenox-mobile/security/advisories/new>).
+<https://github.com/onefennox/fenox/security/advisories/new>).
 
 That opens a private advisory visible only to the maintainers. Please include:
 
@@ -45,8 +45,8 @@ following are treated as security-relevant:
 - **Command injection.** Fenox shells out to `adb`, `flutter`, `scrcpy` and
   `tmux`. Device names, app names, IP addresses and config values that reach a
   shell unsanitised are in scope.
-- **The installers.** `install.sh` and `install.ps1`, including where they write,
-  what they add to `PATH`, and what they back up.
+- **The installer.** `install.sh`, including where it writes, what it adds to
+  `PATH`, and what it backs up.
 - **Config handling.** `~/.fenox.json` is parsed as JSON and backed up on
   corruption; anything that could make a config file execute code is in scope.
 
@@ -64,7 +64,7 @@ following are treated as security-relevant:
 - Release artifacts are built by GitHub Actions from a tagged commit, never
   uploaded by hand.
 - Each binary ships with a `.sha256` file and an aggregate `SHA256SUMS`.
-- Both installers and the self-updater verify the checksum and **refuse to
+- Both the installer and the self-updater verify the checksum and **refuse to
   install** when no checksum is published or when it does not match.
 - The Release workflow runs the end-to-end install test — including a tampered
   download that must be rejected — before publishing anything.

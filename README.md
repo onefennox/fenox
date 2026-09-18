@@ -1,15 +1,16 @@
-# 🚀 Fenox Mobile
+# 🚀 Fenox
 
 **One command to connect, monitor, and launch your Flutter apps on every device you own.**
 
 Fenox bundles ADB connections, reverse-port binding, log streaming, screen mirroring, media capture, and Flutter launches into instant terminal aliases — USB, wireless, and emulator alike, including from WSL.
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue) ![Python](https://img.shields.io/badge/python-3.8%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL-lightgrey)
+![Version](https://img.shields.io/badge/version-1.0.1-blue) ![Python](https://img.shields.io/badge/python-3.8%2B-green) ![License](https://img.shields.io/badge/license-MIT-orange) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL-lightgrey)
 
 ## ✨ Highlights
 
 - 🔌 **USB + wireless + emulator** — auto-detected by `fenox doctor`; works from WSL via a shared Windows adb server
 - ⚡ **Instant aliases** — `<app>-<device>` launches your app with ports bound and backend URLs set; aliases auto-reload when config changes
+- 📨 **Your phone's own data** — `fenox phone messages` reads texts, threads and unread counts straight from the phone: no root, nothing installed on it
 - 🔥 **Blast deploys** — `fenox run <app> @group` launches on every device in a group, side-by-side in tmux
 - 👀 **Live watcher** — `fenox watch` re-binds reverse ports the moment a device (re)connects
 - 📦 **Profiles** — `fenox profile export` on one machine, `import` on another; full setup in seconds
@@ -28,28 +29,28 @@ Fenox bundles ADB connections, reverse-port binding, log streaming, screen mirro
 | `tmux` | `fenox run <app> all` blast deploys — optional |
 | `python3` 3.8+ | only for a from-source build or plugins |
 
-**Platform support: Linux and WSL.** macOS is not supported — there is no macOS
-build and the Linux binaries cannot run there, so the installer refuses with a
-clear message rather than installing something that will not start. A native
-**Windows client is planned as a separate GUI app**; this terminal tool does not
-claim Windows support yet.
+**Platform support: Linux and WSL.** macOS and native Windows are not supported —
+there is no build for either, and the Linux binaries cannot run there, so the
+installer refuses with a clear message rather than installing something that
+will not start. On a Windows machine you run fenox *inside* WSL; that is what
+WSL support means here.
 
 ## 📦 Install
 
 **Linux / WSL** — prebuilt binary, no toolchain needed:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/onefennox/fenox-mobile/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/install.sh | bash
 ```
 
 **From source:**
 
 ```bash
-git clone https://github.com/onefennox/fenox-mobile.git
-cd fenox-mobile && bash install.sh
+git clone https://github.com/onefennox/fenox.git
+cd fenox && bash install.sh
 ```
 
-The bash installer installs to `~/.local/bin/fenox-mobile` with a `fenox` alias
+The bash installer installs to `~/.local/bin/fenox` with a `fenox` alias
 and backs up any previous install. Force a source build with
 `FENOX_BUILD_FROM_SOURCE=1 bash install.sh`.
 
@@ -164,8 +165,8 @@ The examples below use **`myapp`** (as the app) and **`mydevice`** (as the devic
 | `myapp-release` | 🚀 **Launch** | Navigates to the project directory and builds a release APK. |
 | `myapp-all` | 🔥 **Blast Deploy** | Opens `tmux`, splits screen side-by-side, connects to **all** online devices (asks which offline ones to try), and runs Flutter simultaneously. |
 | `myapp-mydevice-nuke` | ☢️ **Nuke Protocol** | **1-second factory reset:** Runs `flutter clean`, `pub get`, uninstalls the app package from the phone via ADB, and reinstall. |
-| `mydevice-screenshot` | 📸 **Media Capture** | Takes a UI screenshot, pulls it to your Windows Pictures folder, and **instantly copies it to your clipboard**. |
-| `mydevice-record` | 📸 **Media Capture** | Starts screen recording. Press `Enter` to stop, and it pulls the `.mp4` directly to your Windows folder. |
+| `mydevice-screenshot` | 📸 **Media Capture** | Takes a UI screenshot, pulls it into your `Fenox/Screenshots/<device>/` folder, and **instantly copies it to your clipboard** (WSL: the Windows clipboard). |
+| `mydevice-record` | 📸 **Media Capture** | Starts screen recording. Press `Enter` to stop, and it pulls the `.mp4` straight into `Fenox/Recordings/<device>/`. |
 | `mydevice-mirror` | 📱 **Screen & Logs** | Uses `scrcpy` to instantly open a native window mirroring the phone's screen over Wi-Fi. |
 | `myapp-mydevice-logs` | 📱 **Screen & Logs** | Hunts down the app's PID and streams **only** the logs for that exact Flutter process (ignores system noise). |
 | `myapp-mydevice-bind` | 🔗 **Connections** | Instantly re-establishes the reverse TCP port connection between the physical phone and your local backend. |
@@ -179,7 +180,7 @@ The examples below use **`myapp`** (as the app) and **`mydevice`** (as the devic
 | `<app>-backend` | 🖥️ **Backend** | Starts the app's backend (`npm run dev` etc.) in a tmux session. |
 | `<app>-hot` | ⚡ **Hot Reload** | Sends `r` to the running Flutter session (add `--full` for hot restart). |
 | `<app>-install` | 📦 **Install** | Installs the latest release APK to every connected device. |
-| `fenox-mobile open <app> <device>` | 🚀 **Open App** | Launches the app on a device via `am start`. |
+| `fenox open <app> <device>` | 🚀 **Open App** | Launches the app on a device via `am start`. |
 | `fenox-pair` | 📶 **Setup** | Triggers the Android 11+ Wireless Pairing Wizard. Pairs new devices over Wi-Fi using the 6-digit code (no USB). |
 
 ## ➕ Zero-Friction Onboarding (new project in one step)
@@ -188,14 +189,14 @@ Everything lives in `~/Projects` — so let the tool do the work:
 
 ```bash
 # 1. Register EVERY new Flutter project in ~/Projects automatically:
-fenox-mobile scan                # detects path, backend port, API URLs, backend launcher — no prompts
-fenox-mobile scan --dry-run      # preview first, writes nothing
+fenox scan                # detects path, backend port, API URLs, backend launcher — no prompts
+fenox scan --dry-run      # preview first, writes nothing
 
 # 2. Or register a single project by name (auto-located, zero prompts):
-fenox-mobile add-app --name topmonie --yes
+fenox add-app --name topmonie --yes
 
 # 3. Fix a wrong guess (e.g. custom API domain) without re-typing everything:
-fenox-mobile add-app --name topmonie --api-remote https://api.topmonie.com --update --yes
+fenox add-app --name topmonie --api-remote https://api.topmonie.com --update --yes
 ```
 
 What gets auto-detected:
@@ -214,22 +215,115 @@ Aliases for the new app (`<app>-all`, `<app>-release`, `<app>-<device>`…) are 
 
 ## 🖥️ Interactive Dashboard
 
-Running `fenox-mobile` with no arguments opens a **live dashboard** that keeps
-itself up to date while you decide what to do:
+Running `fenox` with no arguments opens with a **session screen** — the
+banner, then a checklist of your config file, the shared adb server (started
+behind a spinner), your projects directory and the shell hooks — so it is obvious
+what is ready and what is not before you touch anything.
 
-- **Single keypress — no Enter.** Shortcuts, device `#`s and app `#`s all act on
-  one key, and the screen refreshes itself every few seconds.
+From there you are in a **live dashboard** that keeps itself up to date while you
+decide what to do:
+
+- **One list, a number or two keys.** Devices, apps and maintenance tasks are
+  rows in a single selection list under their own headings, on one shared column
+  grid. Move with `↑`/`↓` and confirm with **Enter**, or just type the row's key:
+  `1` opens device 1, `d` runs Doctor, no second keystroke needed. The screen
+  refreshes itself every few seconds while you decide, and `Esc`/`b` step back.
+  On terminals 100 columns or wider the devices and apps sit in one column with
+  the maintenance actions beside them; narrower, everything stacks.
 - **Device telemetry**: battery 🔋, screen, Android version, storage, foreground
   app and a health score, plus app status (git branch, resolved package name,
   last run).
-- **A grouped Command Center per device** — Screen & input, Apps, Files, Device
-  control, Dev tools, and Configure — rather than a wall of letter keys. An
-  **expert keypad** (`e`) still puts every action on a single screen.
+- **The whole toolset for a device on one screen.** All ~45 actions — Screen &
+  input, Apps, Files, Device control, Dev tools and Configure — are visible at
+  once, grouped under those headings and numbered straight through, so nothing is
+  buried behind a category menu. Type the number and press Enter, or arrow to it.
+- **An input line at the bottom.** Keystrokes land there first, which is what
+  makes multi-digit numbers possible (`12` would otherwise fire `1` on the way).
+  It shows what you typed, turns red when it names nothing on the screen, and
+  supports `Backspace` to edit and `Esc` to clear before it goes back.
+- **Consistent screens**: every menu carries a breadcrumb, names the device or
+  app it acts on, groups its actions, and uses `b`/`Esc` to go back. Nothing
+  clears the screen, so the session and your scrollback stay where they were.
+- **The cursor stays where you put it** when you go back to a menu, and the
+  chosen row is highlighted rather than described.
 - **Quiet navigation**: unknown keys are ignored instead of printing an error and
   demanding Enter, and `b` always goes back.
 
-Press `x` to quit. When stdin is not a terminal (piped input, CI), the menu falls
-back to a validated line prompt, so scripts keep working.
+The opening screen also carries a **tip** that rotates daily and only ever
+mentions things that apply to your setup.
+
+**Leaving is just as tidy:** press `x` or `Esc`, or hit `Ctrl+C` — every exit path
+prints a sign-off with the session duration, anything you deployed, and the
+single most useful thing to do next. `Ctrl+C` exits `130` from anywhere, and no
+exit path ever shows a traceback.
+
+When stdin is not a terminal (piped input, CI), the screens still print and the
+menu falls back to a validated line prompt, so scripts keep working.
+
+## 📨 Your Phone's Data, From the Terminal
+
+The adb `shell` user is granted `READ_SMS`, `READ_CALL_LOG`, `READ_CONTACTS` and
+`READ_CALENDAR` on a stock device, so the phone's own data can be read with **no
+root and nothing installed on the phone**:
+
+```bash
+fenox phone messages                  # threads, newest first, with unread counts
+fenox phone messages --unread         # only what needs attention
+fenox phone messages --thread 151     # one conversation, oldest first
+fenox phone messages --search "invoice"
+fenox phone messages --thread 151 --mark-read
+fenox phone messages --json           # for your own scripts
+fenox phone messages --redact         # hide numbers and bodies (screen sharing)
+```
+
+```bash
+fenox phone calls                     # recent calls, newest first (last 30 days)
+fenox phone calls --missed            # only the ones you missed
+fenox phone calls --from 08031234567  # every call with one number
+fenox phone calls --days 0            # the whole log, not just 30 days
+fenox phone calls --from 08031234567 --dial   # call it back, after confirming
+fenox phone calls --mark-read         # clear the "new call" flags shown
+fenox phone calls --json
+```
+
+```bash
+fenox phone contacts                  # the phone book, by name
+fenox phone contacts --search queen   # by name or number
+fenox phone contacts --export book.tsv
+fenox phone calendar                  # the next 7 days, recurring events included
+fenox phone calendar --days 30 --search retro
+fenox phone calendar --add "Standup" --at 09:30
+```
+
+Numbers resolve to contact names, a call that never connected shows its length as
+`—` rather than a misleading `0s`, and a withheld number is reported as unknown
+rather than as the provider's placeholder. `--dial` needs `--from` and always asks
+before it dials anything. Calendar events are read from the phone's *instances*
+table, so a weekly meeting shows up every week it actually happens; `--add` needs
+`--at` as `HH:MM` or `YYYY-MM-DD HH:MM`.
+
+Message bodies are shown as they are by default; `--redact` replaces a number with
+its last four digits and a body with its length, so the shape of a conversation is
+visible without the content. Nothing is uploaded anywhere, and reading never marks
+anything as read unless you pass `--mark-read`.
+
+Inside the dashboard, the four **PHONE** rows on a device screen open the same
+things as browsable screens: **Read messages** (`1`), **Read the call log** (`2`,
+with a day-grouped list, a live count of unread messages and unheard voicemails,
+and a per-call screen to call back, remove the call, or see that number's
+history), **Read contacts** (`3`, searchable, and a per-contact screen that jumps
+into the calls and messages with that person), and **Read the calendar** (`4`,
+with add-event).
+
+| What | Status |
+| --- | --- |
+| Messages: read, search, mark read, export | ✅ no root |
+| Call log: read, filter, search, call back, remove, export | ✅ no root |
+| Contacts: read, search, call, message, export | ✅ no root |
+| Calendar: read, search, add, export | ✅ no root |
+| Contacts, calendar | 🔜 next, same mechanism |
+| Notifications, device control | 🔜 planned |
+| Sending an SMS from the terminal | needs the optional companion app |
 
 ## 💾 Where Files Land
 
@@ -249,19 +343,19 @@ If you prefer using the tool explicitly or want to script it further, you can us
 
 | Command | Description |
 | --- | --- |
-| `fenox-mobile` | Opens the live interactive dashboard (single-keypress). |
+| `fenox` | Opens the live interactive dashboard (single-keypress). |
 | `fenox-connect` | ⚡ **One-shot connect**: connects all devices (USB + wireless, no prompts), explains stuck devices, binds all ports. `fenox-connect <device>` for one. |
-| `fenox-mobile rename <old> <new>` | ✏️ **Rename device** — regenerates all aliases instantly. `m` in the menu does the same. |
-| `fenox-mobile run myapp mydevice` | Standard launch. Use `all` as the device for Tmux blast deployment (`fenox-mobile run myapp all`). |
-| `fenox-mobile run myapp mydevice --remote` | Launch targeting remote backend. |
-| `fenox-mobile bind myapp mydevice` | Bind ports for a specific app/device. |
-| `fenox-mobile build myapp` | Build release APK. |
-| `fenox-mobile logs myapp mydevice` | Stream app-specific logs. |
-| `fenox-mobile mirror mydevice` | Start Scrcpy mirroring. |
-| `fenox-mobile pair` | Start Wireless Pairing Wizard. |
-| `fenox-mobile doctor` | Run full system health check and restart. |
-| `fenox-mobile init` | One-time setup. `--reset-settings` re-asks the questions. |
-| `fenox-mobile uninstall` | Remove fenox, its config and its shell hooks. `--yes` skips the prompt, `--keep-config` keeps `~/.fenox.json`. |
+| `fenox rename <old> <new>` | ✏️ **Rename device** — regenerates all aliases instantly. `m` in the menu does the same. |
+| `fenox run myapp mydevice` | Standard launch. Use `all` as the device for Tmux blast deployment (`fenox run myapp all`). |
+| `fenox run myapp mydevice --remote` | Launch targeting remote backend. |
+| `fenox bind myapp mydevice` | Bind ports for a specific app/device. |
+| `fenox build myapp` | Build release APK. |
+| `fenox logs myapp mydevice` | Stream app-specific logs. |
+| `fenox mirror mydevice` | Start Scrcpy mirroring. |
+| `fenox pair` | Start Wireless Pairing Wizard. |
+| `fenox doctor` | Run full system health check and restart. |
+| `fenox init` | One-time setup. `--reset-settings` re-asks the questions. |
+| `fenox uninstall` | Remove fenox, its config and its shell hooks. `--yes` skips the prompt, `--keep-config` keeps `~/.fenox.json`. |
 
 ## 🧹 Uninstall
 
@@ -273,9 +367,8 @@ fenox uninstall --keep-config  # keep ~/.fenox.json and your devices/apps
 
 It removes the installed binary, the `fenox` symlink, the config, config backups
 and the run history, and strips only its own hooks from `~/.bashrc` and
-`~/.zshrc` — other lines in those files are left untouched. On Windows, run
-`fenox-mobile uninstall` and then remove `%LOCALAPPDATA%\Programs\fenox` from
-your `PATH`. Running it from a source checkout never deletes the checkout.
+`~/.zshrc` — other lines in those files are left untouched. Running it from a
+source checkout never deletes the checkout.
 
 ## 🩺 Troubleshooting
 
@@ -305,10 +398,10 @@ domain once with `fenox init`, or per app with
 
 ## ❓ FAQ
 
-**Does it work on macOS or Windows?** Not today. Fenox targets Linux and WSL:
-the installer refuses on macOS rather than installing a Linux binary that cannot
-run. Windows is planned as a separate GUI client, not a port of this CLI — the
-terminal tool never claimed Windows support for its device features.
+**Does it work on macOS or Windows natively?** No. Fenox targets Linux and WSL:
+the installer refuses on macOS and on any other operating system rather than
+installing a Linux binary that cannot run. There is no native Windows build — on
+a Windows machine, run fenox inside WSL.
 
 **Does it need a Python toolchain?** No. The installers fetch a self-contained
 binary. Python 3.8+ is only needed to build from source or to write plugins.
@@ -317,8 +410,8 @@ binary. Python 3.8+ is only needed to build from source or to write plugins.
 groups), `~/.fenox/` (plugins, profiles, hooks), `~/.fenox-backups/`. Use
 `fenox profile export <name>` to move a setup between machines.
 
-**How do I pin a version?** Built from a clone, edit `VERSION`. On Windows,
-`install.ps1 -Version v1.0.0`. On Linux, install from a clone at that tag.
+**How do I pin a version?** Built from a clone, edit `VERSION` so the installer
+resolves that release's tag, then run `bash install.sh`.
 
 **A device went offline and came back.** `fenox watch` re-binds reverse ports as
 soon as a device reconnects, and `fenox sync` reconnects known devices on demand.

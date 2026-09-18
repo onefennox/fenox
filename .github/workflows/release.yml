@@ -30,14 +30,14 @@ jobs:
             docker run --rm --platform linux/arm64 -v "$PWD":/work -w /work \
               python:3.12-slim bash -c "apt-get update -qq && apt-get install -y -qq binutils && \
                 pip install pyinstaller rich && \
-                pyinstaller --onefile --name fenox-mobile \
+                pyinstaller --onefile --name fenox \
                   --distpath dist/linux/aarch64 --workpath /tmp/build \
-                  --specpath /tmp src/fenox_mobile_source.py"
+                  --specpath /tmp src/fenox.py"
           else
             pip install pyinstaller rich
-            pyinstaller --onefile --name fenox-mobile \
+            pyinstaller --onefile --name fenox \
               --distpath dist/linux/x86_64 --workpath build --specpath /tmp \
-              src/fenox_mobile_source.py
+              src/fenox.py
           fi
 
       - name: Verify binary runs
@@ -45,9 +45,9 @@ jobs:
           if [ "${{ matrix.arch }}" = "aarch64" ]; then
             # arm64 binaries can't exec on the x86_64 host directly — verify inside the container
             docker run --rm --platform linux/arm64 -v "$PWD":/work -w /work \
-              python:3.12-slim bash -c "dist/linux/aarch64/fenox-mobile --version && dist/linux/aarch64/fenox-mobile --help > /dev/null && echo OK"
+              python:3.12-slim bash -c "dist/linux/aarch64/fenox --version && dist/linux/aarch64/fenox --help > /dev/null && echo OK"
           else
-            BIN=dist/linux/${{ matrix.arch }}/fenox-mobile
+            BIN=dist/linux/${{ matrix.arch }}/fenox
             $BIN --version
             $BIN --help > /dev/null
           fi
@@ -56,12 +56,12 @@ jobs:
         run: |
           sudo chown -R "$(id -u):$(id -g)" dist || true   # docker wrote files as root
           cd dist/linux/${{ matrix.arch }}
-          mv fenox-mobile fenox-mobile-linux-${{ matrix.arch }}
-          sha256sum fenox-mobile-linux-${{ matrix.arch }} > fenox-mobile-linux-${{ matrix.arch }}.sha256
+          mv fenox fenox-linux-${{ matrix.arch }}
+          sha256sum fenox-linux-${{ matrix.arch }} > fenox-linux-${{ matrix.arch }}.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: fenox-mobile-linux-${{ matrix.arch }}
+          name: fenox-linux-${{ matrix.arch }}
           path: dist/linux/${{ matrix.arch }}/*
 
   e2e:
@@ -76,16 +76,16 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: fenox-mobile-linux-x86_64
+          name: fenox-linux-x86_64
           path: release-bin
 
       - name: Make the published binary executable
-        run: chmod +x release-bin/fenox-mobile-linux-x86_64
+        run: chmod +x release-bin/fenox-linux-x86_64
 
       # Proves the shipped artifact actually installs through install.sh: one-liner
       # path, clone path, .sha256 fallback, and refusal on a tampered download.
       - name: End-to-end install test against the real artifact
-        run: bash tests/test_release_e2e.sh release-bin/fenox-mobile-linux-x86_64
+        run: bash tests/test_release_e2e.sh release-bin/fenox-linux-x86_64
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -100,19 +100,19 @@ jobs:
 
       - name: Stage release files
         run: |
-          cp artifacts/fenox-mobile-linux-x86_64/fenox-mobile-linux-x86_64 .
-          cp artifacts/fenox-mobile-linux-x86_64/fenox-mobile-linux-x86_64.sha256 .
-          cp artifacts/fenox-mobile-linux-aarch64/fenox-mobile-linux-aarch64 .
-          cp artifacts/fenox-mobile-linux-aarch64/fenox-mobile-linux-aarch64.sha256 .
-          cat fenox-mobile-linux-*.sha256 > SHA256SUMS
+          cp artifacts/fenox-linux-x86_64/fenox-linux-x86_64 .
+          cp artifacts/fenox-linux-x86_64/fenox-linux-x86_64.sha256 .
+          cp artifacts/fenox-linux-aarch64/fenox-linux-aarch64 .
+          cp artifacts/fenox-linux-aarch64/fenox-linux-aarch64.sha256 .
+          cat fenox-linux-*.sha256 > SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            fenox-mobile-linux-x86_64
-            fenox-mobile-linux-x86_64.sha256
-            fenox-mobile-linux-aarch64
-            fenox-mobile-linux-aarch64.sha256
+            fenox-linux-x86_64
+            fenox-linux-x86_64.sha256
+            fenox-linux-aarch64
+            fenox-linux-aarch64.sha256
             SHA256SUMS

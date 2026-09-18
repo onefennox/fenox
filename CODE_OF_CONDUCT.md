@@ -56,7 +56,7 @@ individual is officially representing the project in public spaces.
 
 Report abusive, harassing, or otherwise unacceptable behaviour to the
 maintainers via a private report:
-<https://github.com/onefennox/fenox-mobile/security/advisories/new> (private to
+<https://github.com/onefennox/fenox/security/advisories/new> (private to
 maintainers), or by contacting the maintainer directly on GitHub
 ([@onefennox](https://github.com/onefennox)).
 

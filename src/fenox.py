@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, subprocess, sys, json, argparse, shutil, datetime, time, secrets, string, re, signal
+import os, subprocess, sys, json, argparse, shutil, datetime, time, secrets, string, re, signal, shlex
 from pathlib import Path
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -9,6 +9,7 @@ from rich import box
 from rich.text import Text
 from rich.rule import Rule
 from rich.live import Live
+from rich.cells import cell_len
 
 console = Console()
 CONFIG_PATH = os.path.expanduser("~/.fenox.json")
@@ -21,9 +22,27 @@ HISTORY_PATH = os.path.expanduser("~/.fenox_history.json")
 # keeps the default port 5037 so stray `adb` calls never start a competing
 # server there. USB debugging works because only Windows can see USB.
 ADB_SERVER_PORT = 5038
-FENOX_VERSION = "1.0.0"
-KNOWN_COMMANDS = {"run", "bind", "connect", "rename", "logs", "nuke", "mirror", "screenshot", "record", "build", "doctor", "sync", "discover", "add-app", "scan", "backend", "hot", "install", "open", "pair", "pair-qr", "devices", "profile", "watch", "update", "groups", "init", "uninstall"}
-IS_WINDOWS = sys.platform == "win32"
+FENOX_VERSION = "1.0.1"
+FENOX_REPO = "onefennox/fenox"
+# Content providers whose data the adb `shell` user may read on a stock device.
+SMS_URI = "content://sms"
+SMS_INBOX_URI = "content://sms/inbox"
+SMS_THREADS_URI = "content://sms/conversations"
+CONTACT_PHONES_URI = "content://com.android.contacts/data/phones"
+CALL_LOG_URI = "content://call_log/calls"
+CALENDAR_URI = "content://com.android.calendar/calendars"
+CALENDAR_EVENTS_URI = "content://com.android.calendar/events"
+CALENDAR_INSTANCES_URI = "content://com.android.calendar/instances/when/{start}/{end}"
+# CallLog.Calls type codes as the provider stores them, and the words they mean.
+# 4 is a voicemail, 7 a call that was answered somewhere else.
+CALL_KINDS = {"1": "incoming", "2": "outgoing", "3": "missed", "4": "voicemail",
+              "5": "rejected", "6": "blocked", "7": "answered elsewhere"}
+CALL_KIND_KEYS = {"incoming": "1", "outgoing": "2", "missed": "3", "voicemail": "4",
+                  "rejected": "5", "blocked": "6", "answered elsewhere": "7"}
+# Extended one resource at a time; each has to be read from a real device before
+# being offered, because the providers differ between ROMs.
+PHONE_RESOURCES = ("messages", "calls", "contacts", "calendar")
+KNOWN_COMMANDS = {"run", "bind", "connect", "rename", "logs", "nuke", "mirror", "screenshot", "record", "build", "doctor", "sync", "discover", "add-app", "scan", "backend", "hot", "install", "open", "pair", "pair-qr", "devices", "profile", "watch", "update", "groups", "init", "uninstall", "phone"}
 IS_LINUX = sys.platform.startswith("linux")
 IS_MACOS = sys.platform == "darwin"
 IS_WSL = os.path.exists("/proc/version") and ("microsoft" in open("/proc/version").read().lower() or bool(os.environ.get("WSL_DISTRO_NAME")))
@@ -39,7 +58,7 @@ def _win_user():
     except Exception:
         pass
     try:
-        out = subprocess.run(["/mnt/c/Windows/System32/cmd.exe", "/c", "echo %USERNAME%"], capture_output=True, text=True, timeout=6).stdout.strip()
+        out = subprocess.run(["/mnt/c/Windows/System32/cmd.exe", "/c", "echo %USERNAME%"], capture_output=True, text=True, timeout=6, stdin=subprocess.DEVNULL).stdout.strip()
         if out and out != "%USERNAME%":
             return out
     except Exception:
@@ -62,7 +81,7 @@ def _find_windows_adb():
         if os.path.exists(c):
             return c
     try:
-        out = subprocess.run(["/mnt/c/Windows/System32/cmd.exe", "/c", "where adb"], capture_output=True, text=True, timeout=6).stdout.strip().splitlines()
+        out = subprocess.run(["/mnt/c/Windows/System32/cmd.exe", "/c", "where adb"], capture_output=True, text=True, timeout=6, stdin=subprocess.DEVNULL).stdout.strip().splitlines()
         if out:
             winpath = out[-1].strip()
             drive, rest = winpath[0].lower(), winpath[2:].replace("\\", "/")
@@ -100,7 +119,7 @@ def ensure_shared_adb_server():
     try:
         probe = subprocess.run(
             [ADB_EXE, "-P", str(ADB_SERVER_PORT), "devices"],
-            capture_output=True, text=True, timeout=8,
+            capture_output=True, text=True, timeout=8, stdin=subprocess.DEVNULL,
         )
         if probe.returncode == 0 and "List of devices" in probe.stdout:
             return
@@ -122,7 +141,7 @@ def ensure_shared_adb_server():
     try:
         subprocess.run(
             ["/mnt/c/Windows/System32/taskkill.exe", "/IM", "adb.exe", "/F"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8,
         )
         time.sleep(1)
         subprocess.Popen(
@@ -316,8 +335,13 @@ def _confirm(prompt, default=True):
         return default
 
 def run_cmd(cmd, timeout=None):
-    try: return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
-    except: return ""
+    # stdin is /dev/null on purpose: these are captured, non-interactive commands,
+    # and a child that reads the terminal would swallow the user's next keypress.
+    try:
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                              timeout=timeout, stdin=subprocess.DEVNULL).stdout.strip()
+    except Exception:
+        return ""
 
 def get_connected_device_ids():
     raw_ids = [line.strip().split()[0] for line in run_cmd("timeout 5 adb devices").splitlines() if line.strip() and "device" in line and not line.strip().startswith("List")]
@@ -334,20 +358,6 @@ def get_connected_device_ids():
 
 def is_device_enabled(dev_info):
     return not dev_info.get("disabled", False)
-
-def discover_wireless_debug_ports(target_ip):
-    if not shutil.which("nmap"):
-        return []
-
-    output = run_cmd(f"timeout 10 nmap -p 37000-44000 {target_ip} --open -T4 --host-timeout 8s")
-    ports = []
-    for line in output.splitlines():
-        if "/tcp" not in line or "open" not in line:
-            continue
-        port = line.split("/")[0].strip()
-        if port.isdigit():
-            ports.append(port)
-    return ports
 
 def try_connect(target_ip, port):
     result = run_cmd(f"timeout 8 adb connect {target_ip}:{port}")
@@ -536,8 +546,8 @@ def check_and_connect(dev_key, interactive=False):
   • Phone screen is locked or Wireless Debugging was turned off
 
 [cyan]💡 You can pair using:[/cyan]
-  1. 📸 [bold]fenox-mobile pair-qr[/bold] — QR code method (recommended)
-  2. 🔢 [bold]fenox-mobile pair[/bold] — Manual pairing code
+  1. 📸 [bold]fenox pair-qr[/bold] — QR code method (recommended)
+  2. 🔢 [bold]fenox pair[/bold] — Manual pairing code
 """)
     pair_choice = Confirm.ask("[yellow]Would you like to pair the device now?[/yellow]")
     if pair_choice:
@@ -645,7 +655,7 @@ def action_pair_qr():
     # Start ADB server in network mode
     proc = subprocess.Popen(
         ["adb", "-a", "-P", str(adb_port), "nodaemon", "server"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     time.sleep(2)
     console.print(f"[green]✅ ADB listening on {pc_ip}:{adb_port}[/green]\n")
@@ -713,7 +723,7 @@ def action_pair_qr():
   1. Make sure your phone is on the [bold]same WiFi network[/bold] as this PC
   2. On phone: [bold]Developer Options → Wireless Debugging → Pair with QR code[/bold]
   3. Scan the QR code above with your phone's camera
-  4. If scanning doesn't work, use [bold]fenox-mobile pair[/bold] instead (manual code)
+  4. If scanning doesn't work, use [bold]fenox pair[/bold] instead (manual code)
 
 [cyan]Your PC IP: {pc_ip}
 ADB Port: {adb_port}
@@ -721,18 +731,122 @@ Password: {password}[/cyan]
 """)
 
 # --- Scrcpy Mirroring ---
+# Android 14 already broke some of scrcpy 1.x's shell tricks, and Android 15
+# removed SurfaceControl.createDisplay entirely, which kills the video encoder
+# on the 1.25 that Ubuntu 24.04 ships. Kept in one place so the version floor is
+# checkable rather than folklore.
+SCRCPY_MIN_VERSION = (2, 4)
+SCRCPY_TOO_OLD = (
+    'scrcpy {found} is too old for Android {android} — its screen encoder uses '
+    'calls Android has removed.\n'
+    'Mirroring needs scrcpy {minv}.0 or newer. Install the official build next to this '
+    'app (no sudo needed):\n\n'
+    '    mkdir -p ~/.local/opt ~/.local/bin\n'
+    '    wget -O /tmp/scrcpy.tar.gz '
+    'https://github.com/Genymobile/scrcpy/releases/download/v{latest}/scrcpy-linux-x86_64-v{latest}.tar.gz\n'
+    '    tar -xzf /tmp/scrcpy.tar.gz -C ~/.local/opt\n'
+    '    ln -sf ~/.local/opt/scrcpy-linux-x86_64-v{latest}/scrcpy ~/.local/bin/scrcpy\n\n'
+    'Then start a new terminal so ~/.local/bin is picked up.')
+
+
+def scrcpy_version(binpath):
+    """(major, minor) of a scrcpy binary, or None when it will not say."""
+    try:
+        probe = subprocess.run([binpath, "--version"], capture_output=True, text=True,
+                               timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"scrcpy\s+v?(\d+)\.(\d+)", probe.stdout + probe.stderr)
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def _android_release(dev_id):
+    """The device's Android version, for explaining version mismatches."""
+    try:
+        probe = subprocess.run(
+            ["adb", "-P", str(ADB_SERVER_PORT), "-s", dev_id,
+             "shell", "getprop", "ro.build.version.release"],
+            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+    return probe.stdout.strip() or "?"
+
+
+def _scrcpy_log_file(dev_id):
+    """A per-run log path, the same layout the screenshots and recordings use."""
+    dev_sub = os.path.join(LOGS_DIR, re.sub(r"[^\w.-]", "_", str(dev_id)))
+    try:
+        os.makedirs(dev_sub, exist_ok=True)
+    except OSError:
+        dev_sub = LOGS_DIR
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(dev_sub, f"mirror_{stamp}.log")
+
+
 def action_mirror(dev_key):
-    if not shutil.which("scrcpy") and not os.path.exists("/usr/bin/scrcpy"):
-        console.print("[red]❌ 'scrcpy' is not installed. Please install it to use mirroring.[/red]")
+    """Mirror the phone with scrcpy, and say so when it does not come up.
+
+    scrcpy's output used to be discarded, so a failed launch read as a silent
+    no-op: the user picked Mirror, nothing appeared, and the tool said nothing.
+    It now keeps the window's output in a log file and reports when the mirror
+    is not up after a few seconds, with the log to look at.
+    """
+    scrcpy_bin = shutil.which("scrcpy") or ("/usr/bin/scrcpy" if os.path.exists("/usr/bin/scrcpy") else None)
+    if not scrcpy_bin:
+        console.print("[red]❌ scrcpy is not installed — it is what draws the mirror window.[/red]")
+        console.print("[dim]Ubuntu/Debian: sudo apt install scrcpy — on WSL install the "
+                      "Linux build here, not the Windows one[/dim]")
         return
     dev_id = check_and_connect(dev_key, interactive=True)
-    if not dev_id: return
-    console.print(f"[green]📱 Launching mirror for {dev_key.upper()}...[/green]")
-    scrcpy_bin = shutil.which("scrcpy") or "/usr/bin/scrcpy"
-    subprocess.Popen([scrcpy_bin, "-s", dev_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not dev_id:
+        return
+    version = scrcpy_version(scrcpy_bin)
+    android = _android_release(dev_id)
+    try:
+        android_major = int(str(android).split(".")[0])
+    except ValueError:
+        android_major = 0
+    if version and version < SCRCPY_MIN_VERSION and android_major >= 14:
+        console.print(Panel(
+            SCRCPY_TOO_OLD.format(found=".".join(map(str, version)), android=android,
+                                  minv=SCRCPY_MIN_VERSION[0], latest="3.3.4"),
+            box=box.ROUNDED, border_style="yellow", title_align="left",
+            title=Text("MIRROR NEEDS A NEWER SCRCPY", style="yellow"), padding=(0, 1)))
+        console.print("[dim]Trying anyway — older scrcpy still mirrors Android up to 13.[/dim]")
+    console.print(f"[green]📱 Launching mirror for {dev_key.upper()} ({dev_id})…[/green]")
+    ensure_output_dirs()
+    log_path = _scrcpy_log_file(dev_id)
+    logf = open(log_path, "w", encoding="utf-8")
+    env = dict(os.environ, ANDROID_ADB_SERVER_PORT=str(ADB_SERVER_PORT))
+    try:
+        proc = subprocess.Popen([scrcpy_bin, "-s", dev_id], stdout=logf, stderr=logf,
+                                stdin=subprocess.DEVNULL, env=env,
+                                start_new_session=True)
+    finally:
+        logf.close()                     # the child holds its own descriptor
+    # A window that is alive a few seconds in has a device to draw. Anything else
+    # is a failed launch, which used to be invisible.
+    time.sleep(4)
+    if proc.poll() is None:
+        console.print(f"[green]✅ Mirror window is up.[/green] "
+                      f"[dim]Close it on the phone or here; output: {_pretty_path(log_path)}[/dim]")
+        return
+    tail = ""
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            tail = "".join(f.readlines()[-6:])
+    except OSError:
+        pass
+    console.print(f"[red]❌ The mirror window did not come up — it exited "
+                  f"{(proc.returncode or '?')} right away.[/red]")
+    if tail:
+        console.print(f"[dim]Last lines from {_pretty_path(log_path)}:[/dim]")
+        for line in tail.strip().splitlines()[-4:]:
+            console.print(f"  [dim]·[/dim] {line.strip()[:110]}")
+    console.print("[dim]Full output: " + _pretty_path(log_path) + "[/dim]")
 
 # --- Doctor: auto-discover and connect devices ---------------------------------
-# Use 'fenox-mobile sync' to reconnect known devices, or 'fenox-mobile pair' to add new ones.
+# Use 'fenox sync' to reconnect known devices, or 'fenox pair' to add new ones.
 
 # --- One-shot connect: plug in (or be on Wi-Fi) and run this — done ---
 def _warn_unauthorized_devices():
@@ -807,7 +921,7 @@ def action_sync():
 # --- Media Capture (Screenshot/Record) ---
 def _open_in_windows(win_filepath):
     try:
-        subprocess.run(["/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "-Command", f"Start-Process '{win_filepath}'"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "-Command", f"Start-Process '{win_filepath}'"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -836,7 +950,7 @@ def capture_media(dev_id, label, media_type, open_preview=False):
         run_cmd(f"adb -s {dev_id} shell rm /sdcard/fenox_temp.png")
         console.print("[yellow]📋 Copying image to Windows clipboard...[/yellow]")
         ps_cmd = f"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetImage([System.Drawing.Image]::FromFile('{win_filepath}'))"
-        subprocess.run(["/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "-sta", "-Command", ps_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "-sta", "-Command", ps_cmd], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         console.print(f"[green]✅ Saved to {win_filepath} and copied to clipboard![/green]")
         if open_preview:
             _open_in_windows(win_filepath)
@@ -956,11 +1070,11 @@ def action_devices(json_out=False):
     console.print(t)
 
 def action_groups(action=None, name=None, members=None):
-    """Manage device groups: fenox-mobile groups add testers s21+ s21+usb"""
+    """Manage device groups: fenox groups add testers s21+ s21+usb"""
     groups = config.setdefault("groups", {})
     if action in (None, "list"):
         if not groups:
-            console.print("[yellow]No groups yet. Create one:[/yellow] fenox-mobile groups add testers s21+ itel")
+            console.print("[yellow]No groups yet. Create one:[/yellow] fenox groups add testers s21+ itel")
             return
         t = Table(title="Device Groups", box=box.ROUNDED)
         t.add_column("Group"); t.add_column("Members")
@@ -970,14 +1084,14 @@ def action_groups(action=None, name=None, members=None):
         return
     if action == "add":
         if not name or not members:
-            console.print("[red]Usage: fenox-mobile groups add <group> <device1> [device2 ...][/red]"); return
+            console.print("[red]Usage: fenox groups add <group> <device1> [device2 ...][/red]"); return
         bad = [m for m in members if m not in DEVICES]
         if bad:
             console.print(f"[red]❌ Unknown device(s): {', '.join(bad)}. Known: {', '.join(DEVICES.keys())}[/red]"); return
         groups[name] = sorted(set(groups.get(name, [])) | set(members))
         save_config()
         console.print(f"[green]✅ Group @{name}: {', '.join(groups[name])}[/green]")
-        console.print(f"[dim]Run on the whole group: fenox-mobile run <app> @{name}[/dim]")
+        console.print(f"[dim]Run on the whole group: fenox run <app> @{name}[/dim]")
     elif action == "remove":
         if not name or name not in groups:
             console.print(f"[red]❌ Unknown group: {name}. Existing: {', '.join(groups.keys()) or 'none'}[/red]"); return
@@ -985,7 +1099,7 @@ def action_groups(action=None, name=None, members=None):
         save_config()
         console.print(f"[green]✅ Group @{name} removed.[/green]")
     else:
-        console.print("[red]Usage: fenox-mobile groups [list|add|remove] ...[/red]")
+        console.print("[red]Usage: fenox groups [list|add|remove] ...[/red]")
 
 def setup_settings(force=False):
     """The one-time questions: where projects live, and the remote API domain.
@@ -1064,7 +1178,7 @@ def action_uninstall(args=None):
         # Running from a checkout: never delete the repo we were launched from,
         # only genuine installs in the standard locations.
         console.print(f"[dim]Running from source ({self_path}) — that file is left alone.[/dim]")
-        for candidate in (os.path.expanduser("~/.local/bin/fenox-mobile"), "/usr/local/bin/fenox-mobile"):
+        for candidate in (os.path.expanduser("~/.local/bin/fenox"), "/usr/local/bin/fenox"):
             if not os.path.exists(candidate) or os.path.realpath(candidate) == self_path:
                 continue
             targets.append(("Installed binary", candidate))
@@ -1091,7 +1205,7 @@ def action_uninstall(args=None):
     hooks = []
     for rc in (os.path.expanduser("~/.bashrc"), os.path.expanduser("~/.zshrc")):
         try:
-            if os.path.exists(rc) and "# fenox-mobile" in open(rc, encoding="utf-8", errors="ignore").read():
+            if os.path.exists(rc) and "# fenox" in open(rc, encoding="utf-8", errors="ignore").read():
                 hooks.append(rc)
         except OSError:
             pass
@@ -1129,7 +1243,7 @@ def action_uninstall(args=None):
                     # Drop the line under the marker only if it really is ours.
                     if "fenox" in line:
                         continue
-                if line.lstrip().startswith("# fenox-mobile"):
+                if line.lstrip().startswith("# fenox"):
                     skip_next = True
                     continue
                 kept.append(line)
@@ -1150,7 +1264,7 @@ def action_init(reset=False):
     """One-time setup: environment report, project directory, alias engine, next steps."""
     import platform as _pf
     console.print(Panel.fit("[bold cyan]🚀 FENOX INIT — one-time setup[/bold cyan]", border_style="cyan"))
-    plat = "Windows" if IS_WINDOWS else ("WSL" if IS_WSL else ("macOS" if IS_MACOS else "Linux"))
+    plat = "WSL" if IS_WSL else ("macOS" if IS_MACOS else "Linux")
     t = Table(box=box.ROUNDED, show_header=False)
     t.add_column("Key", style="cyan", no_wrap=True)
     t.add_column("Value")
@@ -1168,13 +1282,7 @@ def action_init(reset=False):
     tt = Table(title="Tool Check", box=box.ROUNDED)
     tt.add_column("Tool"); tt.add_column("Purpose"); tt.add_column("Status"); tt.add_column("Path")
     missing = []
-    if IS_WINDOWS:
-        hints = {"adb": "install Android platform-tools and add adb.exe to your PATH",
-                 "scrcpy": "winget install Genymobile.scrcpy",
-                 "tmux": "not available on Windows — blast deploys run one device at a time",
-                 "flutter": "see https://docs.flutter.dev/get-started/install/windows"}
-        optional = {"tmux"}
-    elif IS_MACOS:
+    if IS_MACOS:
         hints = {"adb": "brew install android-platform-tools",
                  "scrcpy": "brew install scrcpy",
                  "tmux": "brew install tmux",
@@ -1203,11 +1311,7 @@ def action_init(reset=False):
     setup_settings(force=reset)
 
     # --- shell integration ------------------------------------------------------
-    if IS_WINDOWS:
-        console.print()
-        console.print("[dim]Windows: aliases and completions are a bash/zsh feature. Run fenox from "
-                      "PowerShell, or use the raw CLI commands (fenox-mobile run <app> <device>).[/dim]")
-    elif sys.stdin.isatty():
+    if sys.stdin.isatty():
         shell = os.path.basename(os.environ.get("SHELL", "bash"))
         rcfile = "~/.zshrc" if "zsh" in shell else "~/.bashrc"
         rc_path = os.path.expanduser(rcfile)
@@ -1223,7 +1327,7 @@ def action_init(reset=False):
             console.print(f"[cyan]Add the {label} to {rcfile}?[/cyan]")
             if _confirm(f"Append {label} now", default=True):
                 with open(rc_path, "a", encoding="utf-8") as f:
-                    f.write(f"\n# fenox-mobile {label}\n{line}\n")
+                    f.write(f"\n# fenox {label}\n{line}\n")
                 console.print(f"[green]✅ Added.[/green] [dim]Run:[/dim] source {rcfile} "
                               "[dim](or open a new terminal)[/dim]")
             else:
@@ -1250,8 +1354,8 @@ def generate_completions(shell):
     cmds = " ".join(sorted(KNOWN_COMMANDS))
     if shell == "zsh":
         zcmds = " ".join(f"'{c}'" for c in sorted(KNOWN_COMMANDS))
-        print(f"""#compdef fenox fenox-mobile
-# fenox-mobile zsh completion
+        print(f"""#compdef fenox fenox
+# fenox zsh completion
 _fenox() {{
   local -a cmds
   cmds=({zcmds})
@@ -1259,15 +1363,15 @@ _fenox() {{
     _describe 'command' cmds
   fi
 }}
-compdef _fenox fenox fenox-mobile 2>/dev/null""")
+compdef _fenox fenox fenox 2>/dev/null""")
     else:
-        print(f"""# fenox-mobile bash completion
+        print(f"""# fenox bash completion
 _fenox_completions() {{
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=( $(compgen -W "{cmds}" -- "${{COMP_WORDS[COMP_CWORD]}}") )
     fi
 }}
-complete -o default -F _fenox_completions fenox-mobile 2>/dev/null
+complete -o default -F _fenox_completions fenox 2>/dev/null
 complete -o default -F _fenox_completions fenox 2>/dev/null""")
 
 def action_plugin(name, rest):
@@ -1291,6 +1395,18 @@ def _ver_key(v):
     except ValueError:
         return (0,)
 
+def _local_repo_installer():
+    """Path to a clone's install.sh on this machine, or None.
+
+    Both the current directory name and the pre-rename one are checked, so an
+    existing clone still resolves after the project was renamed.
+    """
+    for name in ("fenox", "fenox-mobile"):
+        candidate = os.path.expanduser(f"~/Projects/{name}/install.sh")
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
 def action_update():
     """Self-update from GitHub releases (or local repo build as fallback)."""
     console.print(Panel.fit("[bold cyan]⬆️ FENOX SELF-UPDATE[/bold cyan]", border_style="cyan"))
@@ -1301,8 +1417,8 @@ def action_update():
     try:
         import urllib.request
         req = urllib.request.Request(
-            "https://api.github.com/repos/onefennox/fenox-mobile/releases/latest",
-            headers={"User-Agent": "fenox-mobile-updater", "Accept": "application/vnd.github+json"},
+            f"https://api.github.com/repos/{FENOX_REPO}/releases/latest",
+            headers={"User-Agent": "fenox-updater", "Accept": "application/vnd.github+json"},
         )
         with urllib.request.urlopen(req, timeout=10) as r:
             latest = json.load(r).get("tag_name", "").lstrip("v")
@@ -1316,17 +1432,17 @@ def action_update():
 
     # Path 1: local repo build (developer path, offline-friendly)
     # BUT if the local repo is older than the latest release, prefer downloading.
-    repo_install = os.path.expanduser("~/Projects/fenox-mobile/install.sh")
+    repo_install = _local_repo_installer()
     repo_ver = None
-    if os.path.exists(repo_install):
+    if repo_install:
         try:
             repo_ver = open(os.path.join(os.path.dirname(repo_install), "VERSION")).read().strip()
         except Exception:
             repo_ver = None
     if latest and repo_ver and _ver_key(repo_ver) < _ver_key(latest):
         console.print(f"[yellow]Local repo is v{repo_ver} — older than release v{latest}. Downloading instead.[/yellow]")
-    elif os.path.exists(repo_install):
-        if not Confirm.ask("Rebuild+install from the local repo (~/Projects/fenox-mobile)?", default=True):
+    elif repo_install:
+        if not Confirm.ask(f"Rebuild+install from the local repo ({os.path.dirname(repo_install)})?", default=True):
             return
         rc = os.system(f"bash '{repo_install}'")
         if rc == 0:
@@ -1340,9 +1456,9 @@ def action_update():
         console.print("[red]❌ No local repo and no release info — cannot update.[/red]"); return
     import platform as _platform
     arch = "aarch64" if _platform.machine() in ("aarch64", "arm64") else "x86_64"
-    asset = f"fenox-mobile-linux-{arch}"
-    base = f"https://github.com/onefennox/fenox-mobile/releases/download/v{latest}"
-    tmp_bin = f"/tmp/fenox-mobile.update.{os.getpid()}"
+    asset = f"fenox-linux-{arch}"
+    base = f"https://github.com/{FENOX_REPO}/releases/download/v{latest}"
+    tmp_bin = f"/tmp/fenox.update.{os.getpid()}"
     tmp_sum = tmp_bin + ".sha256"
     try:
         import urllib.request
@@ -1406,13 +1522,13 @@ def _verify_sha256(path, sumfile):
 def action_profile(action, profile_name=None, *, quiet=False):
     """Snapshot or restore your entire fenox setup (devices, apps, groups) to a JSON file."""
     if action not in ("export", "import", "list"):
-        console.print("[red]Usage: fenox-mobile profile export|import|list [name][/red]"); return
+        console.print("[red]Usage: fenox profile export|import|list [name][/red]"); return
     prof_dir = os.path.expanduser("~/.fenox/profiles")
     os.makedirs(prof_dir, exist_ok=True)
     if action == "list":
         profiles = sorted(os.listdir(prof_dir))
         if not profiles:
-            console.print("[yellow]No profiles yet. Create one:[/yellow] fenox-mobile profile export mysetup")
+            console.print("[yellow]No profiles yet. Create one:[/yellow] fenox profile export mysetup")
             return
         t = Table(title="Fenox Profiles", box=box.ROUNDED)
         t.add_column("Profile"); t.add_column("Created")
@@ -1422,7 +1538,7 @@ def action_profile(action, profile_name=None, *, quiet=False):
         console.print(t)
         return
     if not profile_name:
-        console.print("[red]Profile name required: fenox-mobile profile export|import <name>[/red]"); return
+        console.print("[red]Profile name required: fenox profile export|import <name>[/red]"); return
     if not re.fullmatch(r"[A-Za-z0-9_-]+", profile_name):
         console.print("[red]❌ Profile name may only contain letters, numbers, '-' and '_'.[/red]"); return
     prof_path = os.path.join(prof_dir, f"{profile_name}.json")
@@ -1441,7 +1557,7 @@ def action_profile(action, profile_name=None, *, quiet=False):
             json.dump(snapshot, f, indent=2)
         if not quiet:
             console.print(f"[green]✅ Saved {prof_path}[/green]")
-            console.print("[dim]Copy it to another machine, then: fenox-mobile profile import " + profile_name + "[/dim]")
+            console.print("[dim]Copy it to another machine, then: fenox profile import " + profile_name + "[/dim]")
     else:  # import
         if not os.path.exists(prof_path):
             console.print(f"[red]❌ Profile not found: {prof_path}[/red]"); return
@@ -1461,7 +1577,7 @@ def action_profile(action, profile_name=None, *, quiet=False):
         save_config()
         global DEVICES
         DEVICES = config.get("devices", {})
-        console.print("[green]✅ Profile imported. Run 'fenox-mobile doctor' to verify.[/green]")
+        console.print("[green]✅ Profile imported. Run 'fenox doctor' to verify.[/green]")
 
 def action_watch(interval=3):
     """Live device watcher: rebinds reverse ports automatically when a device (re)connects."""
@@ -1565,7 +1681,7 @@ def action_logs(app_key, dev_key):
     if crashes:
         console.print(f"[red]⚠️ {len(crashes)} crash/fatal line(s) detected:[/red]")
         console.print("")
-        console.print("[bold red]🔥 QUICK CRASH TRIAGE — fenox-mobile logs " + app_key + " " + dev_key + " --last-crash[/bold red]")
+        console.print("[bold red]🔥 QUICK CRASH TRIAGE — fenox logs " + app_key + " " + dev_key + " --last-crash[/bold red]")
         seen = set()
         for c in crashes[-3:]:
             if c not in seen:
@@ -1722,7 +1838,7 @@ def action_doctor():
             if not is_known and connected_model:
                 is_known = any(cid in connected_model for cid in configured_ids)
             if not is_known:
-                console.print(f"[dim]ℹ️  Unknown device connected: {d_id} (use 'fenox-mobile pair' to add it)[/dim]")
+                console.print(f"[dim]ℹ️  Unknown device connected: {d_id} (use 'fenox pair' to add it)[/dim]")
     
     action_bind("all", "all", quiet=False)
     console.print("\n[green bold]✨ System optimized and ready.[/green bold]")
@@ -1782,10 +1898,10 @@ def action_run(app_key, dev_key, is_remote):
         run_cmd(f"tmux kill-session -t {session} 2>/dev/null")
         remote_flag = "--remote" if is_remote else ""
         
-        os.system(f"tmux new-session -d -s {session} 'fenox-mobile run {app_key} {online[0]} {remote_flag}'")
+        os.system(f"tmux new-session -d -s {session} 'fenox run {app_key} {online[0]} {remote_flag}'")
         os.system(f"tmux set-option -g mouse on")
         for dev in online[1:]:
-            os.system(f"tmux split-window -h -t {session} 'fenox-mobile run {app_key} {dev} {remote_flag}'")
+            os.system(f"tmux split-window -h -t {session} 'fenox run {app_key} {dev} {remote_flag}'")
             os.system(f"tmux select-layout -t {session} even-horizontal")
             
         console.print(f"[green]🚀 Launching {app_key.upper()} on {len(online)} device(s) via tmux...[/green]")
@@ -1847,39 +1963,39 @@ def action_build(app_key):
 # --- Auto Alias Generator ---
 def generate_aliases():
     for app in APPS:
-        print(f'alias {app}-release="fenox-mobile build {app}"')
-        print(f'alias {app}-all="fenox-mobile run {app} all"')
-        print(f'alias {app}-all-remote="fenox-mobile run {app} all --remote"')
+        print(f'alias {app}-release="fenox build {app}"')
+        print(f'alias {app}-all="fenox run {app} all"')
+        print(f'alias {app}-all-remote="fenox run {app} all --remote"')
         for dev in DEVICES:
-            print(f'alias {app}-{dev}="fenox-mobile run {app} {dev}"')
-            print(f'alias {app}-{dev}-remote="fenox-mobile run {app} {dev} --remote"')
-            print(f'alias {app}-{dev}-bind="fenox-mobile bind {app} {dev}"')
-            print(f'alias {app}-{dev}-logs="fenox-mobile logs {app} {dev}"')
-            print(f'alias {app}-{dev}-nuke="fenox-mobile nuke {app} {dev}"')
+            print(f'alias {app}-{dev}="fenox run {app} {dev}"')
+            print(f'alias {app}-{dev}-remote="fenox run {app} {dev} --remote"')
+            print(f'alias {app}-{dev}-bind="fenox bind {app} {dev}"')
+            print(f'alias {app}-{dev}-logs="fenox logs {app} {dev}"')
+            print(f'alias {app}-{dev}-nuke="fenox nuke {app} {dev}"')
             
     for app in APPS:
-        print(f'alias {app}-backend="fenox-mobile backend {app}"')
-        print(f'alias {app}-hot="fenox-mobile hot {app}"')
-        print(f'alias {app}-install="fenox-mobile install {app}"')
+        print(f'alias {app}-backend="fenox backend {app}"')
+        print(f'alias {app}-hot="fenox hot {app}"')
+        print(f'alias {app}-install="fenox install {app}"')
     for dev in DEVICES:
-        print(f'alias {dev}-mirror="fenox-mobile mirror {dev}"')
-        print(f'alias {dev}-screenshot="fenox-mobile screenshot {dev}"')
-        print(f'alias {dev}-record="fenox-mobile record {dev}"')
+        print(f'alias {dev}-mirror="fenox mirror {dev}"')
+        print(f'alias {dev}-screenshot="fenox screenshot {dev}"')
+        print(f'alias {dev}-record="fenox record {dev}"')
     
-    print('alias fenox-add-app="fenox-mobile add-app"')
-    print('alias fenox-scan="fenox-mobile scan"')
-    print('alias fenox-bind-all="fenox-mobile bind all all"')
-    print('alias fenox-connect="fenox-mobile connect"')
-    print('alias fenox-rename="fenox-mobile rename"')
-    print('alias fenox-doctor="fenox-mobile doctor"')
-    print('alias fenox-sync="fenox-mobile sync"')
-    print('alias fenox-discover="fenox-mobile discover"')
-    print('alias fenox-pair="fenox-mobile pair"')
-    print('alias fenox-pair-qr="fenox-mobile pair-qr"')
-    print('alias fenox-shot-all="fenox-mobile screenshot all"')
+    print('alias fenox-add-app="fenox add-app"')
+    print('alias fenox-scan="fenox scan"')
+    print('alias fenox-bind-all="fenox bind all all"')
+    print('alias fenox-connect="fenox connect"')
+    print('alias fenox-rename="fenox rename"')
+    print('alias fenox-doctor="fenox doctor"')
+    print('alias fenox-sync="fenox sync"')
+    print('alias fenox-discover="fenox discover"')
+    print('alias fenox-pair="fenox pair"')
+    print('alias fenox-pair-qr="fenox pair-qr"')
+    print('alias fenox-shot-all="fenox screenshot all"')
     print('alias fenox-reload="source ~/.zshrc"')
     # --- Live alias auto-reload: re-eval aliases whenever ~/.fenox.json changes ---
-    # Installed once via the same `eval "$(fenox-mobile --generate-aliases)"` line.
+    # Installed once via the same `eval "$(fenox --generate-aliases)"` line.
     # After add-app / scan / config edits, new aliases just work — no `source` needed.
     print('if [[ -n "$ZSH_VERSION" ]]; then')
     print('  _fenox_maybe_reload() {')
@@ -1890,7 +2006,7 @@ def generate_aliases():
     print('    fi')
     print('    if [[ -n "$mt" && "$mt" != "${_FENOX_CFG_MTIME:-}" ]]; then')
     print('      _FENOX_CFG_MTIME=$mt')
-    print('      eval "$(fenox-mobile --generate-aliases 2>/dev/null)"')
+    print('      eval "$(fenox --generate-aliases 2>/dev/null)"')
     print('    fi')
     print('  }')
     print('  precmd_functions=(${precmd_functions:#_fenox_maybe_reload})')
@@ -2077,25 +2193,20 @@ def _git_status(path):
     return f"[green]{branch}[/green]" + (" [yellow]✗ dirty[/yellow]" if dirty else " [green]✓ clean[/green]")
 
 # --- Interactive input ---------------------------------------------------------
-# Menus respond to a single keypress, which needs the terminal in raw mode.
-# Everything degrades to line input when stdin is not a TTY, so piped input, CI
-# and dumb terminals keep working.
+# Menus read keys as they are pressed (raw mode) so navigation feels immediate,
+# but every screen also accepts a typed line and Enter. Everything degrades to
+# line input when stdin is not a TTY, so piped input, CI and dumb terminals work.
 try:
     import termios as _termios
     import tty as _tty
 except ImportError:
     _termios = _tty = None
-try:
-    import msvcrt as _msvcrt
-except ImportError:
-    _msvcrt = None
 
 # Names are lowercase so they can be compared against option and back keys directly.
 _ESCAPE_KEYS = {"\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left"}
-_WIN_ARROWS = {"H": "up", "P": "down", "K": "left", "M": "right"}
 
 def _read_key(timeout=None):
-    """Read one keypress without waiting for Enter.
+    """Read one key as it is pressed.
 
     Returns a single lowercased character, or one of up/down/left/right/esc/
     enter/backspace. Returns None on timeout, or immediately when stdin is not an
@@ -2104,318 +2215,437 @@ def _read_key(timeout=None):
     if not sys.stdin.isatty():
         return None
 
-    if _msvcrt is not None:                    # Windows console
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while True:
-            if _msvcrt.kbhit():
-                ch = _msvcrt.getwch()
-                if ch in ("\x00", "\xe0"):     # arrow / function key prefix
-                    return _WIN_ARROWS.get(_msvcrt.getwch(), "")
-                if ch == "\r": return "enter"
-                if ch == "\x1b": return "esc"
-                if ch == "\x08": return "backspace"
-                if ch == "\x03": raise KeyboardInterrupt
-                return ch.lower()
-            if deadline is not None and time.monotonic() >= deadline:
-                return None
-            time.sleep(0.03)
-
     if _termios is None:
         return None
 
+    # Read the raw fd, never sys.stdin's buffer: a buffered read can pull in the
+    # rest of an escape sequence, which then looks like nothing arrived and an
+    # arrow key gets mistaken for Escape (i.e. "quit").
     import select
     fd = sys.stdin.fileno()
     old = _termios.tcgetattr(fd)
     try:
         _tty.setcbreak(fd)
-        ready, _, _ = select.select([sys.stdin], [], [], timeout)
-        if not ready:
+        if not select.select([fd], [], [], timeout)[0]:
             return None
-        ch = sys.stdin.read(1)
+        data = os.read(fd, 1)
     finally:
         _termios.tcsetattr(fd, _termios.TCSADRAIN, old)
 
-    if ch == "\x1b":                           # maybe an escape sequence
-        ready, _, _ = select.select([sys.stdin], [], [], 0.02)
-        if ready:
-            rest = sys.stdin.read(2)
-            return _ESCAPE_KEYS.get("\x1b" + rest, "esc")
-        return "esc"
+    if not data:
+        return "eof"                           # stdin closed, not a timeout
+    ch = data.decode("utf-8", "ignore")
+    if ch == "\x1b":                           # Esc, or the start of an arrow key
+        if not select.select([fd], [], [], 0.1)[0]:
+            return "esc"                       # nothing followed: a real Escape
+        seq = ch
+        while len(seq) < 6:
+            if not select.select([fd], [], [], 0.05)[0]:
+                break
+            nxt = os.read(fd, 1)
+            if not nxt:
+                break
+            seq += nxt.decode("utf-8", "ignore")
+            if seq[-1].isalpha() or seq[-1] == "~":
+                break
+        # Anything unrecognised reports as empty rather than Escape: a missed
+        # arrow key must never be read as "quit".
+        return _ESCAPE_KEYS.get(seq, "")
     if ch in ("\r", "\n"): return "enter"
     if ch in ("\x7f", "\x08"): return "backspace"
     if ch == "\x03": raise KeyboardInterrupt
     return ch.lower()
 
-def _wait_any_key(hint="press any key to continue"):
-    """Let the user read an action's output, then continue without needing Enter."""
+def _wait_any_key(hint="press Enter to continue"):
+    """Pause so an action's output can be read, then continue."""
     if not sys.stdin.isatty():
         return
     console.print(f"\n  [dim]{hint}…[/dim]")
-    try:
-        _read_key()
-    except KeyboardInterrupt:
-        pass
+    while True:                       # Enter and Esc both move on
+        key = _read_key()             # Ctrl+C here means "quit" — never swallowed
+        if key in (None, "enter", "esc", "eof"):
+            return
 
-def _ask_key(prompt="select", default="b"):
-    """One-keypress selector. Falls back to a line prompt when stdin is not a TTY."""
-    if not sys.stdin.isatty():
-        return Prompt.ask(f"▸ [dim]{prompt}[/dim]", default=default).lower()
-    console.print(f"  [bold bright_white]▸[/bold bright_white] "
-                  f"[dim]{prompt} — one key, [bold]{default}[/bold] = back[/dim]")
-    try:
-        key = _read_key()
-    except KeyboardInterrupt:
-        return default
-    if key in (None, "esc"):
-        return default
-    return str(key).lower()
+# --- Screen chrome -----------------------------------------------------------
+# Every interactive screen is assembled from the same three pieces: a header bar
+# (where you are, and the state of things), one or more bordered sections of
+# choices, and a footer holding the key legend. Screens therefore read as one
+# application instead of a series of unrelated prompts.
 
-def _menu_renderable(title, options, body, breadcrumb, subtitle, footer, accent):
-    """Assemble the pieces of a menu screen into one renderable."""
-    parts = []
-    if breadcrumb:
-        parts.append(Text.from_markup(f"  [dim]{breadcrumb}[/dim]"))
-    if body is not None:
-        parts.append(body() if callable(body) else body)
+# Layout switches to side-by-side sections at this width; below it everything
+# stacks, so the dashboard still fits an 80-column terminal.
+TWO_COLUMN_WIDTH = 100
+
+
+def _entry_parts(o):
+    """Normalise one option entry to (key, label, detail, column).
+
+    A `key` of None marks a section header: it is drawn, but the cursor skips it.
+    """
+    return (o[0],
+            o[1] if len(o) > 1 else "",
+            o[2] if len(o) > 2 else "",
+            o[3] if len(o) > 3 else 1)
+
+def _plain(text):
+    """Visible width in terminal cells of a string that may carry rich markup.
+
+    Cell width, not character count: an emoji or CJK character takes two columns,
+    and measuring by characters is what makes a labelled column look truncated.
+    """
+    return cell_len(Text.from_markup(str(text)).plain)
+
+def _resolve(value):
+    """Read a screen field that may be a value or a callable (live screens)."""
+    return value() if callable(value) else value
+
+def _header_bar(title, breadcrumb, subtitle, accent):
+    """The bar across the top of every screen: identity left, live state right."""
+    grid = Table.grid(expand=True)
+    grid.add_column(justify="left", ratio=1)
+    grid.add_column(justify="right")
+    left = "[bold bright_white]⚡ FENOX[/bold bright_white]"
     if title:
-        parts.append(Panel(f"[bold bright_white]{title}[/bold bright_white]",
-                           box=box.HEAVY, border_style=accent, padding=(0, 1)))
+        left += f"   [dim]│[/dim]   [bold bright_white]{title}[/bold bright_white]"
+    grid.add_row(Text.from_markup(left),
+                 Text.from_markup(f"[dim]{breadcrumb}[/dim]") if breadcrumb else Text(""))
     if subtitle:
-        parts.append(Text.from_markup(f"  [dim]{subtitle}[/dim]"))
-    if options:
-        grid = Table.grid(padding=(0, 3))
-        columns = 2 if len(options) > 5 else 1
-        for _ in range(columns):
-            grid.add_column()
-        for i in range(0, len(options), columns):
-            row = [f"[bold {accent}]{k}[/bold {accent}] [dim]{label}[/dim]"
-                   for k, label in options[i:i + columns]]
-            while len(row) < columns:
-                row.append("")
-            grid.add_row(*row)
+        grid.add_row(Text.from_markup(f"[dim]{subtitle}[/dim]"), Text(""))
+    return Panel(grid, box=box.HEAVY, border_style=accent, padding=(0, 1))
+
+def _section_panel(title, rows, cursor, accent, key_w, label_w, has_detail, max_width):
+    """One bordered group of choices, drawn on the screen's shared column grid.
+
+    `rows` are (key, label, detail, ordinal), where ordinal is the row's place in
+    the screen's selectable order — that is what the cursor compares against. The
+    key and label widths come from the whole screen, so sections line up with each
+    other instead of each inventing its own layout.
+    """
+    lines = []
+    for key, label, detail, ordinal in rows:
+        selected = ordinal is not None and ordinal == cursor
+        line = Text()
+        line.append("▸ " if selected else "  ", style=f"bold {accent}" if selected else "")
+        line.append(f"{key}".rjust(key_w) + "  ",
+                    style=f"bold {accent}" if selected else "dim")
+        line.append(str(label), style="bold bright_white" if selected else "dim")
+        if has_detail:
+            line.append(" " * max(0, label_w - _plain(label) + 2))
+            line.append_text(Text.from_markup(str(detail)))
+        line.truncate(max_width, overflow="ellipsis")
+        lines.append(line)
+    return Panel(Group(*lines), box=box.ROUNDED, border_style="grey35",
+                 title=Text(title, style=accent) if title else None,
+                 title_align="left", padding=(0, 1))
+
+def _footer_bar(status, footer):
+    """The line under the sections: at-a-glance status left, key legend right."""
+    if not status:
+        return Text.from_markup(footer)
+    grid = Table.grid(expand=True)
+    grid.add_column(justify="left", ratio=1)
+    grid.add_column(justify="right")
+    grid.add_row(Text.from_markup(status), Text.from_markup(footer))
+    return grid
+
+def _input_bar(typed, matched, accent):
+    """The prompt line: what you have typed, with a caret, and what it will do.
+
+    Numbers longer than a single digit need somewhere to accumulate, so every
+    keystroke lands here first and Enter commits it. The line is always visible,
+    which is also the affordance that says the screen accepts typing.
+    """
+    if typed:
+        hint = "[dim]Enter open · Backspace delete · Esc clears[/dim]"
+    else:
+        hint = "[dim]type a number or a key, then Enter[/dim]"
+    grid = Table.grid(expand=True)
+    grid.add_column(justify="left", ratio=1)
+    grid.add_column(justify="right")
+    line = Text("  ❯ ", style=f"bold {accent}")
+    if typed:
+        line.append(typed, style="bold bright_white" if matched else "bold red")
+    line.append("▌", style=accent if (not typed or matched) else "red")
+    grid.add_row(line, Text.from_markup(hint))
+    return grid
+
+def _menu_renderable(title, options, body, breadcrumb, subtitle, footer, accent,
+                     cursor=0, two_col=False, status=None, typed=None, matched=True):
+    """Assemble a whole screen from its header, sections and footer.
+
+    Options are (key, label[, detail[, column]]), with a key of None for a section
+    header. Sections holding a `detail` get an aligned status column, so rows read
+    like a table instead of loose text.
+    """
+    entries, ordinal = [], 0
+    for raw in options:
+        key, label, detail, column = _entry_parts(raw)
+        entries.append((key, label, detail, column, None if key is None else ordinal))
+        ordinal += 0 if key is None else 1
+
+    parts = [_header_bar(title, _resolve(breadcrumb), _resolve(subtitle), accent)]
+    rendered_body = _resolve(body)
+    if rendered_body is not None:
+        parts.append(rendered_body)
+
+    # Group by column first, then by whichever section header precedes each row.
+    buckets = {}
+    for key, label, detail, column, ordn in entries:
+        section = buckets.setdefault(column, [])
+        if key is None:
+            section.append((label, []))
+            continue
+        if not section:
+            section.append(("", []))
+        section[-1][1].append((key, label, detail, ordn))
+
+    # One column grid for the whole screen, so DEVICES, APPS and ACTIONS share it.
+    # Only rows that carry a status widen the label column: those are the ones the
+    # status has to line up beside. Sizing it from long action labels instead would
+    # push the device details off the edge for no gain.
+    selectable = [e for e in entries if e[0] is not None]
+    detailed = [e for e in selectable if e[2]]
+    key_w = max([_plain(e[0]) for e in selectable] or [1])
+    label_w = min(max([_plain(e[1]) for e in detailed] or [6]), 32)
+    has_detail = bool(detailed)
+
+    side_by_side = bool(two_col and console.size.width >= TWO_COLUMN_WIDTH
+                        and buckets.get(1) and buckets.get(2))
+    # Each panel spends 4 cells on its borders and padding. Side by side, the two
+    # cells are equal and the gutter between them costs 2, so the pair still ends
+    # flush with the right edge instead of leaving a ragged gap.
+    width = console.size.width
+    cell = (width - 2) // 2 if side_by_side else width
+    panels = {column: [_section_panel(name, rows, cursor, accent, key_w, label_w,
+                                      has_detail, max(20, cell - 4))
+                       for name, rows in grouped if rows]
+              for column, grouped in buckets.items()}
+
+    if side_by_side:
+        grid = Table.grid(expand=True, padding=(0, 1), pad_edge=False)
+        grid.add_column(width=cell)
+        grid.add_column(width=cell)
+        grid.add_row(Group(*panels[1]), Group(*panels[2]))
         parts.append(grid)
-    parts.append(Text.from_markup(footer))
+    else:
+        for column in sorted(panels):
+            parts.extend(panels[column])
+    if typed is not None:                      # interactive screens only
+        parts.append(_input_bar(typed, matched, accent))
+    if footer:
+        parts.append(_footer_bar(_resolve(status), footer))
     return Group(*parts)
+
+def _key_hint(back_keys):
+    """The one-line key legend shown under every set of choices."""
+    names = {"b": "b", "x": "x", "esc": "Esc"}
+    back = "/".join(names.get(k, k) for k in back_keys if k)
+    return (f"[dim]↑/↓ or a row's key   [bold bright_white]Enter[/bold bright_white] opens   "
+            f"[bold bright_white]{back}[/bold bright_white] back[/dim]")
 
 def run_menu(title=None, options=(), *, body=None, breadcrumb="", subtitle=None,
              footer=None, interval=0.0, accent="bright_cyan",
-             back_keys=("b", "esc")):
-    """Draw a menu, wait for one keypress, and return the key that was chosen.
+             back_keys=("b", "esc"), state=None, start=0, two_col=False, status=None):
+    """Draw a screen, move with ↑/↓, confirm with Enter.
 
-    options   : list of (key, label) shown as a grid of hints
-    body      : renderable (or callable returning one) drawn above the options
-    interval  : seconds between automatic refreshes; >0 makes the screen live
-    back_keys : keys meaning "go back"; returns None for those
+    options    : rows of (key, label[, detail[, column]]) or (None, "SECTION") for a
+                 heading; may be a callable, so a live screen can rebuild its rows
+    body       : renderable (or callable returning one) drawn above the sections
+    breadcrumb : right-hand side of the header bar; may be a callable
+    subtitle   : dim second line of the header bar; may be a callable
+    status     : left-hand side of the footer bar; may be a callable
+    interval   : seconds between automatic refreshes; >0 makes the screen live
+    two_col    : allow sections in column 2 to sit beside column 1 on wide screens
+    back_keys  : keys meaning "go back"; returns None for those
+    state      : caller-owned dict, so the cursor survives re-entering a screen
+    start      : row to select first
 
-    Unknown keys are ignored without an error message or an Enter press.
+    Enter confirms the highlighted row, and typing a row's own key confirms that
+    row straight away — so `1` opens device 1 without arrowing to it first. Unknown
+    keys are ignored, never an error.
     """
-    valid = [str(k).lower() for k, _ in options]
-    draw = lambda: _menu_renderable(title, options, body, breadcrumb, subtitle,
-                                    footer or "  [bold bright_red]b[/bold bright_red] [dim]back[/dim]",
-                                    accent)
+    holder = state if state is not None else {}
+    holder.setdefault("cursor", start)
+    holder.setdefault("typed", "")
+
+    def current_options():
+        return list(options() if callable(options) else options)
+
+    def selectable():
+        """Keys and labels of the rows the cursor can land on, in screen order."""
+        keys, labels = [], []
+        for raw in current_options():
+            key = raw[0]
+            if key is None:                    # section heading
+                continue
+            keys.append(str(key).lower())
+            labels.append(key)
+        return keys, labels
+
+    def draw():
+        # The body is rendered first: on the dashboard it is what produces the
+        # device and app rows that the sections are built from.
+        items = current_options()               # one read per redraw, never two
+        keys = [str(raw[0]).lower() for raw in items if raw[0] is not None]
+        holder["cursor"] = max(0, min(holder["cursor"], len(keys) - 1)) if keys else 0
+        typed = holder["typed"]
+        return _menu_renderable(title, items, body, breadcrumb, subtitle,
+                                footer or _key_hint(back_keys), accent,
+                                holder["cursor"], two_col, status,
+                                typed, not typed or typed.strip().lower() in keys)
 
     if not sys.stdin.isatty():                 # scripts, pipes, dumb terminals
+        holder["typed"] = ""                    # no prompt line without a terminal
         console.print(draw())
         # Offer whichever back key is not already an option, so piping input can
         # never silently fire a short-cut ("b" means bind, not back, on the main menu).
-        back = next((k for k in back_keys if k and k not in valid), "b")
-        answer = Prompt.ask("▸", choices=valid + [back], default=back).lower()
+        keys, _ = selectable()
+        back = next((k for k in back_keys if k and k not in keys), "b")
+        answer = Prompt.ask("▸", choices=keys + [back], default=back).lower()
         return None if answer in back_keys else answer
 
-    if interval and interval > 0:
-        with Live(draw(), console=console, screen=True, refresh_per_second=4) as live:
-            nxt = time.monotonic() + interval
-            while True:
-                key = _read_key(timeout=0.2)
-                if key is not None:
-                    break
-                if time.monotonic() >= nxt:
+    keep = object()                            # sentinel: the menu stays open
+
+    def react(key):
+        """Act on one keypress: return the chosen key, or `keep` to wait for more."""
+        # None reaches here only on a non-live screen (the live loop redraws on a
+        # timeout instead), which means the key reader could not deliver a key at
+        # all — leave the screen rather than spinning on it.
+        if key is None or key == "eof":
+            return None
+        if key in back_keys:
+            # Esc clears whatever was typed before it leaves, but the others always
+            # leave: a single stray keystroke must never make quitting impossible
+            # ("x" clearing the input instead of quitting left the screen stuck).
+            if holder["typed"] and key == "esc":
+                holder["typed"] = ""
+                return keep
+            return None
+        if key == "backspace":
+            holder["typed"] = holder["typed"][:-1]
+            return keep
+        keys, labels = selectable()
+        if not labels:
+            return keep
+        if key in ("up", "down"):
+            # Arrows are a different intent from typing: they drop the input.
+            step = 1 if key == "down" else -1
+            holder["cursor"] = (holder["cursor"] + step) % len(labels)
+            holder["typed"] = ""
+            return keep
+        if key == "enter":
+            typed = holder["typed"].strip().lower()
+            if not typed:                      # nothing typed: open the highlighted row
+                return labels[holder["cursor"]]
+            return labels[keys.index(typed)] if typed in keys else keep
+        if len(key) == 1 and key.isprintable():
+            holder["typed"] += key
+            typed = holder["typed"].strip().lower()
+            if typed in keys:                  # preview the row the input names
+                holder["cursor"] = keys.index(typed)
+        return keep                            # unknown keys are simply ignored
+
+    # Ctrl+C is deliberately not caught anywhere in here: it unwinds to _main,
+    # which prints the sign-off once and exits 130. Live is used even for static
+    # screens so the highlight moves in place instead of reprinting the menu.
+    with Live(draw(), console=console, screen=bool(interval),
+              refresh_per_second=2, auto_refresh=bool(interval)) as live:
+        nxt = time.monotonic() + interval if interval else None
+        while True:
+            key = _read_key(timeout=0.2 if interval else None)
+            if key is None and interval:      # live screen: nothing typed yet, redraw
+                if nxt and time.monotonic() >= nxt:
                     live.update(draw())
                     nxt = time.monotonic() + interval
-    else:
-        console.print(draw())
-        key = _read_key()
-
-    if key is None:
-        return None
-    if key in back_keys:
-        return None
-    if not valid or key in valid:
-        return key
-    return ""                                  # unknown key → caller redraws
+                continue
+            result = react(key)
+            if result is not keep:
+                return result
+            live.update(draw(), refresh=True)
 
 def _banner():
-    """Header banner with live summary stats, as a renderable."""
-    connected_ids = set(get_connected_device_ids())
-    online_count = 0
-    for key, info in DEVICES.items():
-        if info.get("type") == "emulator":
-            if any(cid.startswith("emulator-") for cid in connected_ids):
-                online_count += 1
-        elif is_device_enabled(info):
-            if any(info.get("ip", "") in cid for cid in connected_ids):
-                online_count += 1
+    """Header banner: what this is, and how much is set up on this machine."""
     total_devices = len(DEVICES)
     total_apps = len(APPS)
-    enabled_devices = sum(1 for info in DEVICES.values() if is_device_enabled(info))
-    offline_count = enabled_devices - online_count
-    disabled_count = total_devices - enabled_devices
-    stats = []
-    if online_count > 0:
-        stats.append(f"[green]● {online_count} online[/green]")
-    if offline_count > 0:
-        stats.append(f"[red]● {offline_count} offline[/red]")
-    if disabled_count > 0:
-        stats.append(f"[yellow]● {disabled_count} disabled[/yellow]")
-    stats_str = "   ".join(stats)
     header = Text.from_markup(
-        f"[bold bright_white]⚡ FENOX MOBILE[/bold bright_white]"
+        f"[bold bright_white]⚡ FENOX[/bold bright_white]"
         f"  [dim bright_white]│[/dim bright_white]  "
         f"[bright_cyan]ENVIRONMENT MANAGER[/bright_cyan]"
         f"  [dim bright_white]│[/dim bright_white]  "
-        f"[bold]{total_devices}[/bold] [dim]devices[/dim]  [dim]•[/dim]  "
-        f"[bold]{total_apps}[/bold] [dim]apps[/dim]"
+        f"[bold]{total_devices}[/bold] [dim]{'device' if total_devices == 1 else 'devices'}[/dim]"
+        f"  [dim]•[/dim]  "
+        f"[bold]{total_apps}[/bold] [dim]{'app' if total_apps == 1 else 'apps'}[/dim]"
     )
-    parts = [Panel(header, box=box.HEAVY, border_style="bright_blue", padding=(0, 1))]
-    if stats_str:
-        parts.append(Text.from_markup(f"  {stats_str}"))
-    return Group(*parts)
-    console.print()
+    return Panel(header, box=box.HEAVY, border_style="bright_blue", padding=(0, 1))
 
-def _build_dashboard():
-    """Pure render of the dashboard: (renderable, dev_index, app_index)."""
-    _parts = []
-    connected_ids = set(get_connected_device_ids())
-    dev_table = Table(
-        box=box.ROUNDED, header_style="bold bright_cyan",
-        border_style="dim blue", show_header=True, pad_edge=True, expand=False,
-        title="[bold bright_cyan]📱 DEVICES[/bold bright_cyan]", title_style="bold",
-    )
-    dev_table.add_column("#", style="dim", width=3, justify="right")
-    dev_table.add_column("Alias", style="bold bright_white", min_width=10)
-    dev_table.add_column("Model", style="dim white", min_width=16)
-    dev_table.add_column("Address", style="dim", min_width=18)
-    dev_table.add_column("Status", min_width=12)
-    dev_table.add_column("Battery", justify="center", min_width=7)
-    dev_table.add_column("Screen", justify="center", min_width=8)
-    dev_table.add_column("Android", justify="center", min_width=8)
-    dev_table.add_column("Storage", justify="center", min_width=8)
-    dev_table.add_column("Foreground", min_width=12)
-    dev_table.add_column("Health", justify="center", width=6)
-    dev_index = {}
-    idx = 1
-    for key, info in DEVICES.items():
-        d_id = None
-        if info.get("type") == "emulator":
-            for cid in connected_ids:
-                if cid.startswith("emulator-"):
-                    d_id = cid
-                    break
-            addr = f"emulator:{info.get('port', '')}"
-        elif not is_device_enabled(info):
-            dev_table.add_row(
-                f"[dim]{idx}[/dim]", key, str(info.get("model", "?")),
-                f"[dim]{info.get('ip') or info.get('serial') or info.get('port') or '?'}[/dim]",
-                "[yellow]⏭ Disabled[/yellow]", "", "", "", "", "", "[yellow]—[/yellow]"
-            )
-            dev_index[idx] = key
-            idx += 1
-            continue
-        elif info.get("type") == "usb":
-            addr = f"usb:{info.get('serial', '')}"
-            for cid in connected_ids:
-                if cid == info.get("serial"):
-                    d_id = cid
-                    break
-        else:
-            addr = f"{info.get('ip', '')}:{info.get('port', '')}"
-            for cid in connected_ids:
-                if info.get("ip", "") in cid:
-                    d_id = cid
-                    break
-        if d_id:
-            tele = get_device_telemetry(d_id)
-            batt = str(tele.get("battery", "?"))
-            try:
-                b = int(batt)
-                if b <= 15:
-                    batt_str, health = f"[bold red]{batt}%[/bold red]", "[bold red]🔴[/bold red]"
-                elif b <= 30:
-                    batt_str, health = f"[yellow]{batt}%[/yellow]", "[yellow]🟡[/yellow]"
-                else:
-                    batt_str, health = f"[green]{batt}%[/green]", "[green]🟢[/green]"
-                if tele.get("charging"):
-                    batt_str += " ⚡"
-            except (ValueError, TypeError):
-                batt_str, health = f"[dim]{batt}[/dim]", "[dim]⚪[/dim]"
-            screen = tele.get("screen", "?")
-            screen_str = f"[green]☀ {screen}[/green]" if screen == "On" else f"[dim]☾ {screen}[/dim]"
-            dev_table.add_row(
-                f"[dim]{idx}[/dim]", key,
-                f"[bright_white]{info.get('model', '?')}[/bright_white]",
-                f"[dim]{addr}[/dim]",
-                "[bold green]● Online[/bold green]",
-                batt_str, screen_str,
-                f"[cyan]{tele.get('android', '?')}[/cyan]",
-                f"[dim]{tele.get('storage', '?')}[/dim]",
-                f"[dim]{tele.get('app', '?')}[/dim]",
-                health,
-            )
-        else:
-            dev_table.add_row(
-                f"[dim]{idx}[/dim]", key, f"[dim]{info.get('model', '?')}[/dim]",
-                f"[dim]{addr}[/dim]", "[bold red]● Offline[/bold red]",
-                "[dim]—[/dim]", "[dim]—[/dim]", "[dim]—[/dim]",
-                "[dim]—[/dim]", "[dim]—[/dim]", "[red]🔴[/red]",
-            )
-        dev_index[idx] = key
-        idx += 1
-    _parts.append(dev_table)
+def _device_row(key, info, connected_ids):
+    """One dashboard row: the device, then the status worth seeing at a glance."""
+    if info.get("type") == "emulator":
+        dev_id = next((cid for cid in connected_ids if cid.startswith("emulator-")), None)
+    elif info.get("type") == "usb":
+        dev_id = info.get("serial") if info.get("serial") in connected_ids else None
+    else:
+        dev_id = next((cid for cid in connected_ids if info.get("ip", "") in cid), None)
+    model = info.get("model") or "Android device"
+    if not is_device_enabled(info):
+        return f"📱 {key}", f"{model} · [yellow]disabled[/yellow]"
+    if not dev_id:
+        return f"📱 {key}", f"{model} · [red]● offline[/red]"
+    tele = get_device_telemetry(dev_id)
+    bits = [model, "[bold green]● online[/bold green]"]
+    battery = str(tele.get("battery", "?"))
+    if battery.isdigit():
+        level = int(battery)
+        colour = "red" if level <= 15 else ("yellow" if level <= 30 else "green")
+        bits.append(f"[{colour}]🔋 {level}%{' ⚡' if tele.get('charging') else ''}[/{colour}]")
+    screen = tele.get("screen")
+    if screen:
+        bits.append(f"[green]☀ {screen}[/green]" if screen == "On" else f"[dim]☾ {screen}[/dim]")
+    if tele.get("app"):
+        bits.append(f"[dim]{tele['app']}[/dim]")
+    return f"📱 {key}", " · ".join(bits)
 
-    app_table = Table(
-        box=box.ROUNDED, header_style="bold bright_green",
-        border_style="dim green", show_header=True, pad_edge=True, expand=False,
-        title="[bold bright_green]📦 APPS[/bold bright_green]", title_style="bold",
-    )
-    app_table.add_column("#", style="dim", width=3, justify="right")
-    app_table.add_column("App", style="bold bright_white", min_width=16)
-    app_table.add_column("Git", min_width=22)
-    app_table.add_column("Package", style="dim", min_width=10)
-    app_table.add_column("Last Run", min_width=18)
-    app_index = {}
-    idx = 1
-    for key, data in APPS.items():
-        pkg = data.get("package") or resolve_package(key) or "?"
-        last = get_last_run(key)
-        last_str = "[dim]—[/dim]"
-        if last:
-            ago = _human_ago(last.get("ts", ""))
-            ok = last.get("ok", False)
-            action = last.get("action", "?")
-            if ok:
-                last_str = f"[green]{ago}[/green] [dim]({action}, ✓)[/dim]"
-            else:
-                last_str = f"[yellow]{ago}[/yellow] [dim]({action}, ✗)[/dim]"
-        git = _git_status(os.path.expanduser(data.get("path", "")))
-        app_table.add_row(
-            f"[dim]{idx}[/dim]", f"[bright_white]{key}[/bright_white]",
-            git, f"[dim]{pkg}[/dim]", last_str,
-        )
-        app_index[idx] = key
-        idx += 1
-    _parts.append(app_table)
-    return Group(*_parts), dev_index, app_index
+def _app_row(key, data):
+    """One dashboard row: the app, its git state, and when it was last deployed."""
+    git = _git_status(os.path.expanduser(data.get("path", "")))
+    last = get_last_run(key)
+    if last:
+        ago = _human_ago(last.get("ts", ""))
+        ok = last.get("ok", False)
+        detail = (f"{git} · [dim]{last.get('action', 'run')} {ago}[/dim] "
+                  f"[{'green' if ok else 'yellow'}]{'✓' if ok else '✗'}[/]")
+    else:
+        detail = f"{git} · [dim]never deployed[/dim]"
+    return f"📦 {key}", detail
+
+def _open_path(path):
+    """Open a file with the platform's default handler (WSL → Windows, else xdg-open)."""
+    if IS_WSL:
+        _open_in_windows(path)
+        return
+    opener = shutil.which("xdg-open") or shutil.which("open")
+    if not opener:
+        console.print("[yellow]No opener found — install xdg-open to preview captures.[/yellow]")
+        return
+    try:
+        subprocess.Popen([opener, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        console.print(f"[red]❌ Could not open {path}: {e}[/red]")
 
 def _open_last_capture(key):
-    for media_type, (wsl_dir, win_dir) in [("screenshot", (SHOTS_DIR, WIN_SHOTS_DIR)), ("record", (RECS_DIR, WIN_RECS_DIR))]:
+    """Open the newest screenshot or recording taken for this device."""
+    for wsl_dir, win_dir in ((SHOTS_DIR, WIN_SHOTS_DIR), (RECS_DIR, WIN_RECS_DIR)):
         dev_sub = os.path.join(wsl_dir, key)
-        if not os.path.isdir(dev_sub): continue
+        if not os.path.isdir(dev_sub):
+            continue
         files = sorted(Path(dev_sub).glob("*"), key=os.path.getmtime, reverse=True)
-        if files:
-            _open_in_windows(f"{win_dir}\\{key}\\{files[0].name}")
-            console.print(f"[green]🖼 Opened {files[0].name}[/green]")
-            return
-    console.print("[yellow]No captures found for this device yet.[/yellow]")
+        if not files:
+            continue
+        newest = files[0]
+        console.print(f"[green]🖼 Opening {newest.name}[/green]")
+        _open_path(f"{win_dir}\\{key}\\{newest.name}" if IS_WSL else str(newest))
+        return
+    console.print("[yellow]No captures yet for this device — take a screenshot first.[/yellow]")
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  FUTURISTIC DEVICE COMMAND CENTER
@@ -2431,36 +2661,6 @@ def _bar(percent, width=20):
     elif pct > 30: c = "yellow"
     else: c = "red"
     return f"[{c}]{'█' * filled}[/][dim]{'░' * empty}[/] {pct}%"
-
-def _device_header(key):
-    """Render the device command center header with live stats."""
-    info = DEVICES[key]
-    d_id = check_and_connect(key, interactive=False)
-    connected = d_id is not None
-    model = info.get("model", "?")
-    addr = f"{info.get('ip', '')}:{info.get('port', '')}"
-    status_str = "[bold green]● ONLINE[/bold green]" if connected else "[bold red]● OFFLINE[/bold red]"
-    bat_pct, stor_pct, screen, android = 0, 0, "?", "?"
-    if connected:
-        tele = get_device_telemetry(d_id)
-        try: bat_pct = int(tele.get("battery", "0"))
-        except: pass
-        try: stor_pct = int(str(tele.get("storage", "0")).replace("%", ""))
-        except: pass
-        screen = tele.get("screen", "?")
-        android = tele.get("android", "?")
-    ht = Text.from_markup(
-        f"[bold bright_white]⚡ DEVICE COMMAND CENTER[/bold bright_white]\n"
-        f"[dim]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim]\n"
-        f"[bold bright_cyan]📱 {key}[/bold bright_cyan]  [dim]│[/dim]  "
-        f"[bright_white]{model}[/bright_white]  [dim]│[/dim]  "
-        f"{status_str}  [dim]│[/dim]  Android {android}\n"
-        f"[dim]📍[/dim] [dim]{addr}[/dim]  [dim]│[/dim]  "
-        f"🔋 {_bar(bat_pct, 12)}  [dim]│[/dim]  "
-        f"💾 {_bar(stor_pct, 12)}  [dim]│[/dim]  "
-        f"{'☀' if screen == 'On' else '☾'} Screen {screen}"
-    )
-    console.print(Panel(ht, box=box.HEAVY, border_style="bright_blue", padding=(0, 1)))
 
 def _pick_installed_app(dev_id, label="app"):
     """Show list of installed apps and let user pick one."""
@@ -2754,7 +2954,7 @@ def _action_running_processes(dev_id):
 
 def _action_send_notification(dev_id):
     title = Prompt.ask("Title", default="Fenox Alert")
-    body = Prompt.ask("Body", default="Test from fenox-mobile")
+    body = Prompt.ask("Body", default="Test from fenox")
     run_cmd(f'adb -s {dev_id} shell "cmd notification post -S bigtext -t \'{title}\' fenox_tag \'{body}\'" 2>/dev/null')
     console.print(f"[green]✅ Notification sent: {title}[/green]")
 
@@ -2848,174 +3048,1519 @@ def _action_health_monitor(dev_id):
 #  CATEGORY SUB-MENUS
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _device_screen_menu(key):
-    dev_id = check_and_connect(key, interactive=True)
-    if not dev_id: return
-    while True:
-        console.clear()
-        console.print(Panel(f"[bold bright_white]🖥  SCREEN & INPUT — {key.upper()}[/bold bright_white]", box=box.HEAVY, border_style="bright_cyan", padding=(0, 1)))
-        console.print(
-            "  [bold bright_cyan]1[/bold bright_cyan] Mirror (scrcpy)     [bold bright_cyan]2[/bold bright_cyan] Screenshot          [bold bright_cyan]3[/bold bright_cyan] Record screen\n"
-            "  [bold bright_cyan]4[/bold bright_cyan] Wake screen         [bold bright_cyan]5[/bold bright_cyan] Lock screen         [bold bright_cyan]6[/bold bright_cyan] Type text\n"
-            "  [bold bright_cyan]7[/bold bright_cyan] Tap at XY           [bold bright_cyan]8[/bold bright_cyan] Swipe gesture       [bold bright_cyan]9[/bold bright_cyan] Key combos\n"
-            "  [bold bright_cyan]A[/bold bright_cyan] Copy text → device  [bold bright_cyan]B[/bold bright_cyan] Read clipboard      [bold bright_cyan]C[/bold bright_cyan] Open URL"
-        )
-        console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = _ask_key("action")
-        if choice == "b": return
-        elif choice == "1": action_mirror(key)
-        elif choice == "2": action_media(key, "screenshot")
-        elif choice == "3": action_media(key, "record")
-        elif choice == "4": run_cmd(f"adb -s {dev_id} shell input keyevent KEYCODE_WAKEUP"); console.print("[green]✅ Screen woken[/green]")
-        elif choice == "5": run_cmd(f"adb -s {dev_id} shell input keyevent KEYCODE_SLEEP"); console.print("[green]✅ Screen locked[/green]")
-        elif choice == "6": _action_type_text(dev_id)
-        elif choice == "7": _action_tap_screen(dev_id)
-        elif choice == "8": _action_swipe(dev_id)
-        elif choice == "9": _action_key_combo(dev_id)
-        elif choice.upper() == "A": _action_clipboard_copy(dev_id)
-        elif choice.upper() == "B": _action_clipboard_read(dev_id)
-        elif choice.upper() == "C": _action_open_url(dev_id)
-        _wait_any_key()
-
-def _device_apps_menu(key):
-    dev_id = check_and_connect(key, interactive=True)
-    if not dev_id: return
-    while True:
-        console.clear()
-        console.print(Panel(f"[bold bright_white]📦 APP MANAGEMENT — {key.upper()}[/bold bright_white]", box=box.HEAVY, border_style="bright_green", padding=(0, 1)))
-        console.print(
-            "  [bold bright_green]1[/bold bright_green] Open/launch app      [bold bright_green]2[/bold bright_green] List all apps        [bold bright_green]3[/bold bright_green] Uninstall app\n"
-            "  [bold bright_green]4[/bold bright_green] Clear app data       [bold bright_green]5[/bold bright_green] Force stop app       [bold bright_green]6[/bold bright_green] App info\n"
-            "  [bold bright_green]7[/bold bright_green] Install APK from PC  [bold bright_green]8[/bold bright_green] Nuke + relaunch"
-        )
-        console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = _ask_key("action")
-        if choice == "b": return
-        elif choice == "1":
-            if APPS:
-                app_key = Prompt.ask("App", choices=list(APPS.keys()))
-                action_open(app_key, key)
-        elif choice == "2": _action_list_apps(dev_id)
-        elif choice == "3": _action_uninstall_app(dev_id)
-        elif choice == "4": _action_clear_app_data(dev_id)
-        elif choice == "5": _action_force_stop(dev_id)
-        elif choice == "6": _action_app_info(dev_id)
-        elif choice == "7": _action_install_apk_from_pc(dev_id)
-        elif choice == "8":
-            if APPS:
-                app_key = Prompt.ask("App", choices=list(APPS.keys()))
-                action_nuke(app_key, key)
-        _wait_any_key()
-
-def _device_files_menu(key):
-    dev_id = check_and_connect(key, interactive=True)
-    if not dev_id: return
-    while True:
-        console.clear()
-        console.print(Panel(f"[bold bright_white]📁 FILE MANAGEMENT — {key.upper()}[/bold bright_white]", box=box.HEAVY, border_style="bright_yellow", padding=(0, 1)))
-        console.print(
-            "  [bold bright_yellow]1[/bold bright_yellow] Push file to device\n"
-            "  [bold bright_yellow]2[/bold bright_yellow] Pull file from device\n"
-            "  [bold bright_yellow]3[/bold bright_yellow] Browse device storage"
-        )
-        console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = _ask_key("action")
-        if choice == "b": return
-        elif choice == "1": _action_push_file(dev_id)
-        elif choice == "2": _action_pull_file(dev_id)
-        elif choice == "3": _action_browse_storage(dev_id)
-        _wait_any_key()
-
-def _device_control_menu(key):
-    dev_id = check_and_connect(key, interactive=True)
-    if not dev_id: return
-    while True:
-        console.clear()
-        console.print(Panel(f"[bold bright_white]🔧 DEVICE CONTROL — {key.upper()}[/bold bright_white]", box=box.HEAVY, border_style="bright_magenta", padding=(0, 1)))
-        console.print(
-            "  [bold bright_magenta]1[/bold bright_magenta] Reboot options      [bold bright_magenta]2[/bold bright_magenta] Toggle WiFi         [bold bright_magenta]3[/bold bright_magenta] Toggle mobile data\n"
-            "  [bold bright_magenta]4[/bold bright_magenta] Toggle Bluetooth    [bold bright_magenta]5[/bold bright_magenta] Volume control      [bold bright_magenta]6[/bold bright_magenta] Set brightness\n"
-            "  [bold bright_magenta]7[/bold bright_magenta] Interactive shell"
-        )
-        console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = _ask_key("action")
-        if choice == "b": return
-        elif choice == "1": _action_reboot_menu(dev_id)
-        elif choice == "2": _action_toggle_wifi(dev_id)
-        elif choice == "3": _action_toggle_data(dev_id)
-        elif choice == "4": _action_toggle_bluetooth(dev_id)
-        elif choice == "5": _action_volume_control(dev_id)
-        elif choice == "6": _action_brightness_control(dev_id)
-        elif choice == "7": _action_interactive_shell(dev_id)
-        _wait_any_key()
-
-def _device_devtools_menu(key):
-    dev_id = check_and_connect(key, interactive=True)
-    if not dev_id: return
-    while True:
-        console.clear()
-        console.print(Panel(f"[bold bright_white]🔗 DEV TOOLS — {key.upper()}[/bold bright_white]", box=box.HEAVY, border_style="bright_white", padding=(0, 1)))
-        console.print(
-            "  [bold bright_white]1[/bold bright_white] Device info          [bold bright_white]2[/bold bright_white] Battery details      [bold bright_white]3[/bold bright_white] Network info\n"
-            "  [bold bright_white]4[/bold bright_white] Storage breakdown    [bold bright_white]5[/bold bright_white] Running processes    [bold bright_white]6[/bold bright_white] Send notification\n"
-            "  [bold bright_white]7[/bold bright_white] Read notifications   [bold bright_white]8[/bold bright_white] Bind ports           [bold bright_white]9[/bold bright_white] App logs\n"
-            "  [bold bright_green]H[/bold bright_green] ❤️  [bold]Live Health Monitor[/bold]"
-        )
-        console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = _ask_key("action")
-        if choice == "b": return
-        elif choice == "1": _action_device_info_dashboard(dev_id)
-        elif choice == "2": _action_battery_info(dev_id)
-        elif choice == "3": _action_network_info(dev_id)
-        elif choice == "4": _action_storage_info(dev_id)
-        elif choice == "5": _action_running_processes(dev_id)
-        elif choice == "6": _action_send_notification(dev_id)
-        elif choice == "7": _action_read_notifications(dev_id)
-        elif choice == "8":
-            if APPS:
-                app_key = Prompt.ask("App", choices=list(APPS.keys()))
-                action_bind(app_key, key)
-        elif choice == "9":
-            if APPS:
-                app_key = Prompt.ask("App", choices=list(APPS.keys()))
-                action_logs(app_key, key)
-        elif choice.upper() == "H": _action_health_monitor(dev_id)
-        _wait_any_key()
-
-def _device_config_menu(key):
-    while True:
-        console.clear()
-        console.print(Panel(f"[bold bright_white]⚙️  DEVICE CONFIG — {key.upper()}[/bold bright_white]", box=box.HEAVY, border_style="bright_yellow", padding=(0, 1)))
-        info = DEVICES[key]
-        hist = ", ".join(str(p) for p in info.get("port_history", [])) or "—"
-        console.print(f"  [dim]{info.get('model', '?')}  │  {info.get('ip', '')}:{info.get('port', '')}  │  history: {hist}[/dim]")
-        console.print(
-            "\n  [bold bright_green]e[/bold bright_green] ✏️  Edit device\n"
-            "  [bold bright_yellow]g[/bold bright_yellow] ⏯  Toggle enable/disable\n"
-            "  [bold bright_red]h[/bold bright_red] 🗑  Remove device\n"
-            "  [bold bright_cyan]d[/bold bright_cyan] 🔄 Refresh info"
-        )
-        console.print("\n  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        choice = _ask_key("action")
-        if choice == "b": return
-        elif choice == "d": continue
-        elif choice == "e":
-            new_ip = Prompt.ask("IP", default=info.get("ip", ""))
-            new_port = Prompt.ask("Port", default=str(info.get("port", "")))
-            new_model = Prompt.ask("Model", default=info.get("model", ""))
-            DEVICES[key] = {**info, "ip": new_ip, "port": new_port, "model": new_model}
-            save_config(); console.print("[green]✅ Updated[/green]")
-        elif choice == "g":
-            DEVICES[key]["disabled"] = not DEVICES[key].get("disabled", False)
-            save_config(); console.print(f"[green]✅ {'Disabled' if DEVICES[key].get('disabled') else 'Enabled'}[/green]")
-        elif choice == "h":
-            if Confirm.ask(f"[red]Remove '{key}'?[/red]"):
-                del DEVICES[key]; save_config(); console.print("[green]✅ Removed[/green]"); return
-        _wait_any_key()
-
 # ═══════════════════════════════════════════════════════════════════════════
-#  MAIN DEVICE COMMAND CENTER
+#  PHONE DATA — the phone's own data, read through its content providers
+#
+#  The adb `shell` user is granted READ_SMS, READ_CALL_LOG, READ_CONTACTS and
+#  READ_CALENDAR, so messages, call history, contacts and calendar can be read
+#  over adb with no root and nothing installed on the phone. Writing works where
+#  the matching WRITE_ permission is granted — marking a thread read, clearing a
+#  call log entry — and everything here reports a refusal instead of showing an
+#  empty list, because "no messages" and "not allowed to look" are very different
+#  things to be told.
 # ═══════════════════════════════════════════════════════════════════════════
+
+CONTENT_ROW = re.compile(r"^Row:\s*\d+\s*(.*)$")
+CONTENT_FIELD = re.compile(r",\s+(?=[A-Za-z_][A-Za-z0-9_]*=)")
+
+
+def adb_shell(dev_id, shell_cmd, timeout=40):
+    """(ok, output) for a shell command on one device, with its errors.
+
+    Unlike run_cmd this reports failure: a provider that refuses access has to be
+    visible, not swallowed into output that then reads as an empty inbox.
+    """
+    try:
+        # A list, not shell=True: the local shell would strip the quotes meant for
+        # the device shell (--sort 'date DESC' became --sort date DESC, so the
+        # device printed its usage text and a full inbox read as empty), and it
+        # would let a message body's content reach the local shell at all.
+        proc = subprocess.run(["adb", "-s", dev_id, "shell", shell_cmd],
+                              capture_output=True, text=True, timeout=timeout,
+                              stdin=subprocess.DEVNULL)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    output = (proc.stdout + proc.stderr).strip()
+    return (proc.returncode == 0 and not content_error(output)), output
+
+
+def content_error(output):
+    """The provider's own complaint when a query was refused, else ''.
+
+    A refusal is checked for first and across the whole output: the provider
+    prints a generic "Error while accessing provider" line *before* the
+    SecurityException that explains it, and the explanation is the useful half.
+    """
+    if "Permission Denial" in output or "SecurityException" in output:
+        return "permission denied — this ROM restricts what the shell user may read"
+    for line in output.splitlines():
+        if line.startswith("usage:") or "unknown subcommand" in line:
+            # A command the device did not understand must never look like "no data".
+            return f"the phone rejected the command: {line.strip()[:120]}"
+        for marker in ("Error while accessing provider", "Unknown URI",
+                       "no such column", "IllegalArgumentException"):
+            if marker in line:
+                return line.strip()[:200]
+    return ""
+
+
+def parse_content_rows(output):
+    """Rows from `content query`, as dicts.
+
+    The format is `Row: <n> column=value, column=value`. A value may itself contain
+    ", " — a message body, a contact's note — so a comma only starts a new column
+    when what follows looks like `column=`. A value containing a newline spills onto
+    the following line, which is folded back into that column.
+    """
+    rows = []
+    for raw in output.splitlines():
+        line = raw.strip()
+        match = CONTENT_ROW.match(line)
+        if not match:
+            # Anything else (a wrapped value, the CLI's trailing "Date:" line) is
+            # either a continuation or noise. Only a value can continue a row.
+            if rows and line and not line.startswith("Date:") and "=" not in line:
+                last = rows[-1]
+                key = next(reversed(last), None)
+                if key:
+                    last[key] = f"{last[key]}\n{line}"
+            continue
+        row = {}
+        for field in CONTENT_FIELD.split(match.group(1)):
+            if "=" in field:
+                name, value = field.split("=", 1)
+                row[name.strip()] = value
+        rows.append(row)
+    return rows
+
+
+def content_query(dev_id, uri, projection=None, where=None, sort=None):
+    """(ok, rows, error) for one provider query on the device."""
+    cmd = f"content query --uri {uri}"
+    if projection:
+        cmd += f" --projection {':'.join(projection)}"
+    if where:
+        cmd += f" --where {shlex.quote(where)}"
+    if sort:
+        cmd += f" --sort {shlex.quote(sort)}"
+    ok, output = adb_shell(dev_id, cmd)
+    if not ok:
+        return False, [], content_error(output) or output[:200]
+    return True, parse_content_rows(output), ""
+
+
+def phone_contacts(dev_id):
+    """{digits: contact name} so numbers can be shown as the person they are."""
+    ok, rows, _ = content_query(dev_id, CONTACT_PHONES_URI,
+                                ["display_name", "data1"])
+    names = {}
+    for row in rows if ok else []:
+        digits = re.sub(r"\D", "", row.get("data1", ""))
+        name = (row.get("display_name") or "").strip()
+        if name and name != "(Unknown)" and digits:
+            names.setdefault(_number_key(digits), name)
+    return names
+
+
+def _number_key(digits):
+    """Match numbers by their last nine digits: the country code may be recorded
+    one way in the call log and another way in contacts."""
+    return digits[-9:] if len(digits) >= 9 else digits
+
+
+def number_label(number, names, redact=False):
+    """A phone number as its contact name where we can, redacted on request."""
+    digits = re.sub(r"\D", "", number or "")
+    if redact:
+        return f"…{digits[-4:]}" if len(digits) > 4 else "…"
+    if not digits:
+        return number or "unknown"
+    name = names.get(_number_key(digits))
+    if name and name != number:
+        return f"{name} ({number})"
+    return number
+
+
+def _fmt_when(ms):
+    """An epoch-millisecond timestamp the way a person reads it."""
+    try:
+        when = datetime.datetime.fromtimestamp(int(ms) / 1000)
+    except (TypeError, ValueError, OSError):
+        return "—"
+    now = datetime.datetime.now()
+    if when.date() == now.date():
+        return when.strftime("%H:%M")
+    if when.year == now.year:
+        return when.strftime("%d %b %H:%M")
+    return when.strftime("%d %b %Y")
+
+
+def phone_threads(dev_id, names=None, unread_only=False, limit=None):
+    """(threads, error) — newest first, each with address, date and unread count.
+
+    Three queries: the grouped conversation list carries each thread's message
+    count and last snippet, a date-sorted pass over the messages supplies the
+    address and timestamp per thread, and an inbox pass counts the unread ones.
+    """
+    names = names if names is not None else {}
+    ok, grouped, error = content_query(dev_id, SMS_THREADS_URI,
+                                       ["thread_id", "msg_count", "snippet"])
+    if not ok:
+        return None, error
+    ok, latest, error = content_query(dev_id, SMS_URI,
+                                      ["thread_id", "address", "date"],
+                                      sort="date DESC")
+    if not ok:
+        return None, error
+    ok, unread_rows, _ = content_query(dev_id, SMS_INBOX_URI, ["thread_id"],
+                                       where="read=0")
+    unread = {}
+    for row in unread_rows if ok else []:
+        key = row.get("thread_id", "")
+        unread[key] = unread.get(key, 0) + 1
+    head = {}                              # newest first, so the first row per thread wins
+    for row in latest:
+        head.setdefault(row.get("thread_id", ""), row)
+    threads = []
+    for row in grouped:
+        thread_id = row.get("thread_id", "")
+        newest = head.get(thread_id, {})
+        address = newest.get("address", "")
+        threads.append({
+            "thread_id": thread_id,
+            "address": address,
+            "label": number_label(address, names),
+            "date": newest.get("date", ""),
+            "when": _fmt_when(newest.get("date")),
+            "count": row.get("msg_count", ""),
+            "unread": unread.get(thread_id, 0),
+            # A snippet can hold newlines (a bank alert, a multi-part SMS); the
+            # list is one line per thread, so collapse it there.
+            "snippet": " ".join(str(row.get("snippet", "")).split()),
+        })
+    threads.sort(key=lambda t: int(t["date"] or 0), reverse=True)
+    if unread_only:
+        threads = [t for t in threads if t["unread"]]
+    if limit:
+        threads = threads[:limit]
+    return threads, ""
+
+
+def phone_thread_messages(dev_id, thread_id, names=None, limit=30):
+    """(messages, error) for one conversation, oldest first (the last `limit`)."""
+    names = names if names is not None else {}
+    try:
+        clause = f"thread_id={int(thread_id)}"
+    except (TypeError, ValueError):
+        return None, f"not a thread id: {thread_id}"
+    ok, rows, error = content_query(
+        dev_id, SMS_URI, ["_id", "address", "date", "type", "read", "body"],
+        where=clause, sort="date ASC")
+    if not ok:
+        return None, error
+    messages = []
+    for row in rows:
+        kind = {"1": "in", "2": "out", "3": "draft", "4": "out", "5": "failed"}.get(row.get("type"), "in")
+        messages.append({
+            "id": row.get("_id", ""),
+            "address": row.get("address", ""),
+            "label": number_label(row.get("address", ""), names),
+            "when": _fmt_when(row.get("date")),
+            "date": row.get("date", ""),
+            "direction": kind,
+            "read": row.get("read", "1") == "1",
+            "body": row.get("body", "") or "(empty message)",
+        })
+    return (messages[-limit:] if limit else messages), ""
+
+
+def phone_search_messages(dev_id, text, names=None, limit=40):
+    """(messages, error) — messages whose body contains `text`, newest first."""
+    names = names if names is not None else {}
+    safe = str(text).replace("'", "''")        # SQL string escaping
+    ok, rows, error = content_query(
+        dev_id, SMS_URI, ["_id", "address", "date", "type", "read", "body"],
+        where=f"body LIKE '%{safe}%'", sort="date DESC")
+    if not ok:
+        return None, error
+    messages = []
+    for row in rows[:limit]:
+        messages.append({
+            "id": row.get("_id", ""),
+            "address": row.get("address", ""),
+            "label": number_label(row.get("address", ""), names),
+            "when": _fmt_when(row.get("date")),
+            "date": row.get("date", ""),
+            "direction": "out" if row.get("type") == "2" else "in",
+            "read": row.get("read", "1") == "1",
+            "body": row.get("body", "") or "(empty message)",
+            "thread_id": row.get("thread_id", ""),
+        })
+    return messages, ""
+
+
+def phone_mark_thread_read(dev_id, thread_id):
+    """(ok, message). Marking is a write, so it is never done silently."""
+    try:
+        clause = f"thread_id={int(thread_id)} AND read=0"
+    except (TypeError, ValueError):
+        return False, f"not a thread id: {thread_id}"
+    ok, output = adb_shell(
+        dev_id, f"content update --uri {SMS_URI} --where {shlex.quote(clause)} "
+                f"--bind read:i:1")
+    if not ok:
+        return False, content_error(output) or output[:200]
+    count = re.search(r"Updated:?\s*(\d+)", output)
+    return True, f"marked {count.group(1) if count else 'the'} message(s) read"
+
+
+def _provider_text(value):
+    """A provider column as text, with its empty-value spellings as ''.
+
+    A content provider prints an unset column as the literal word NULL, and a
+    dialler writes "(Unknown)" for a number it could not match. Either would be
+    shown as if it were a name — and `NULL` is exactly what a withheld number
+    looks like, so it has to be blank, not the word.
+    """
+    text = str(value or "").strip()
+    return "" if text.upper() in ("NULL", "(UNKNOWN)", "UNKNOWN") else text
+
+
+def _fmt_duration(seconds):
+    """How long a call lasted, the way a person reads it."""
+    try:
+        total = int(seconds)
+    except (TypeError, ValueError):
+        return "—"
+    if total <= 0:
+        return "—"                       # never connected, or under a second
+    if total < 60:
+        return f"{total}s"
+    if total < 3600:
+        return f"{total // 60}m {total % 60:02d}s"
+    return f"{total // 3600}h {(total % 3600) // 60:02d}m"
+
+
+def call_kind(code):
+    """A provider type code as the word a person uses for it."""
+    return CALL_KINDS.get(str(code or "").strip(), "call")
+
+
+def calls_where(kinds=None, days=None, search=None, number=None):
+    """The provider `--where` clause for a call filter, or None for everything.
+
+    Built in one place because the write path filters with it too: a clause that
+    reads the wrong rows would mark the wrong calls as seen.
+    """
+    clauses = []
+    codes = [CALL_KIND_KEYS[kind] for kind in (kinds or []) if kind in CALL_KIND_KEYS]
+    if len(codes) == 1:
+        clauses.append(f"type={codes[0]}")
+    elif codes:
+        # Grouped: an ungrouped "type=1 OR type=2" would let a later AND bind to
+        # only the second of them.
+        clauses.append("(" + " OR ".join(f"type={code}" for code in codes) + ")")
+    if days:
+        clauses.append(f"date>={int((time.time() - int(days) * 86400) * 1000)}")
+    if search:
+        safe = str(search).replace("'", "''")        # SQL string escaping
+        clauses.append(f"(number LIKE '%{safe}%' OR name LIKE '%{safe}%')")
+    if number:
+        digits = re.sub(r"\D", "", str(number))
+        tail = digits[-9:] if len(digits) >= 9 else digits
+        if tail:
+            clauses.append(f"number LIKE '%{tail}%'")
+    return " AND ".join(clauses) or None
+
+
+def phone_calls(dev_id, names=None, kinds=None, days=30, search=None, number=None,
+                limit=None):
+    """(calls, error) — newest first, with who, when, how long and how it ended.
+
+    `days` of 0 (or None) reads the whole log; the default window keeps a redraw
+    to a few hundred rows, which the provider returns in well under a second.
+    The device's own `name` column is only filled when its dialler matched the
+    number to a contact, so names are resolved from contacts as messages are.
+    """
+    names = names if names is not None else {}
+    ok, rows, error = content_query(
+        dev_id, CALL_LOG_URI,
+        ["_id", "number", "date", "duration", "type", "new", "name"],
+        where=calls_where(kinds, days, search, number), sort="date DESC")
+    if not ok:
+        return None, error
+    calls = []
+    for row in rows:
+        address = _provider_text(row.get("number"))
+        cached = _provider_text(row.get("name"))
+        calls.append({
+            "id": row.get("_id", ""),
+            "number": address,
+            "label": cached if cached and cached != "(Unknown)" else number_label(address, names),
+            "when": _fmt_when(row.get("date")),
+            "date": row.get("date", ""),
+            "kind": call_kind(row.get("type")),
+            "duration": _fmt_duration(row.get("duration")),
+            "new": row.get("new", "0") == "1",
+        })
+    return (calls[:limit] if limit else calls), ""
+
+
+def phone_call_counts(calls):
+    """A list of calls as a breakdown line, missed first.
+
+    Missed leads because it is the one a person is looking for; "1 missed · 4 in ·
+    2 out" says more in one line than a table of totals underneath the list.
+    """
+    order = ("missed", "incoming", "outgoing", "rejected", "blocked", "voicemail",
+             "answered elsewhere", "call")
+    words = {"incoming": "in", "outgoing": "out"}
+    counts = {}
+    for call in calls:
+        counts[call["kind"]] = counts.get(call["kind"], 0) + 1
+    return " · ".join(f"{counts[kind]} {words.get(kind, kind)}"
+                      for kind in order if counts.get(kind))
+
+
+def phone_mark_calls_seen(dev_id, call_ids):
+    """(ok, message) — clear the "new call" flag on the rows shown.
+
+    A write, so it only ever happens on request. The device prints nothing at all
+    when a clause matches no rows, so the result is confirmed by reading the flag
+    back instead of trusting a line of output that may not be there.
+    """
+    ids = [str(i) for i in call_ids if str(i).strip().isdigit()]
+    if not ids:
+        return False, "no calls to mark"
+    clause = f"_id IN ({','.join(ids)})"
+    ok, output = adb_shell(
+        dev_id, f"content update --uri {CALL_LOG_URI} --where {shlex.quote(clause)} "
+                f"--bind new:i:0")
+    if not ok:
+        return False, content_error(output) or output[:200]
+    ok, rows, _ = content_query(dev_id, CALL_LOG_URI, ["_id", "new"], where=clause)
+    marked = len(ids)                       # the device said nothing: assume it worked
+    if ok:
+        marked = sum(1 for row in rows if row.get("new") != "1")
+    return True, f"marked {marked} of {len(ids)} call(s) as seen"
+
+
+def phone_contact_rows(dev_id, search=None, limit=None):
+    """(contacts, error) — one row per phone number, by name.
+
+    The contacts `data/phones` view already joins numbers onto names, so a person
+    with three numbers is three rows, each carrying their name. Sorted by the
+    device (name ASC), which is also how its own app shows them.
+    """
+    where = None
+    if search:
+        safe = str(search).replace("'", "''")
+        where = (f"(display_name LIKE '%{safe}%' OR data1 LIKE '%{safe}%')")
+    ok, rows, error = content_query(
+        dev_id, CONTACT_PHONES_URI,
+        ["contact_id", "display_name", "data1"],
+        where=where, sort="display_name ASC")
+    if not ok:
+        return None, error
+    seen, contacts = set(), []
+    for row in rows:
+        name = _provider_text(row.get("display_name"))
+        number = _provider_text(row.get("data1"))
+        if not number:
+            continue
+        key = (name.lower(), re.sub(r"\D", "", number))
+        if key in seen:
+            continue
+        seen.add(key)
+        contacts.append({
+            "id": row.get("contact_id", ""),
+            "name": name or "(no name)",
+            "number": number,
+            "type": _number_type(row.get("data2")),
+        })
+    return (contacts[:limit] if limit else contacts), ""
+
+
+def _number_type(code):
+    """A Phone.TYPE code as a short label, '' when unset."""
+    return {"1": "home", "2": "mobile", "3": "work"}.get(str(code or "").strip(), "")
+
+
+def phone_calendars(dev_id):
+    """(calendars, error) — the accounts the phone keeps events in."""
+    ok, rows, error = content_query(
+        dev_id, CALENDAR_URI, ["_id", "name", "account_name", "ownerAccount",
+                               "account_type"])
+    if not ok:
+        return None, error
+    calendars = []
+    for row in rows:
+        name = (_provider_text(row.get("calendar_displayName"))
+                or _provider_text(row.get("name"))
+                or _provider_text(row.get("account_name"))
+                or f"calendar {row.get('_id', '?')}")
+        calendars.append({
+            "id": row.get("_id", ""),
+            "name": name,
+            "account": _provider_text(row.get("account_name"))
+                       or _provider_text(row.get("ownerAccount")),
+            "local": _provider_text(row.get("account_type")).lower() == "local",
+        })
+    return calendars, ""
+
+
+def phone_events(dev_id, days=7, calendar_id=None, search=None, limit=None):
+    """(events, error) — occurrences between now and `days` ahead, soonest first.
+
+    Read from the *instances* table, not the events table: instances are the
+    expanded occurrences, so a weekly repeating event shows up every week it
+    actually happens instead of once at its original date.
+    """
+    start = int(time.time() * 1000)
+    end = start + int(days or 0) * 86400_000
+    ok, rows, error = content_query(
+        dev_id, CALENDAR_INSTANCES_URI.format(start=start, end=end),
+        ["event_id", "title", "begin", "end", "allDay", "eventLocation",
+         "calendar_id"], sort="begin ASC")
+    if not ok:
+        return None, error
+    events = []
+    for row in rows:
+        title = _provider_text(row.get("title")) or "(untitled)"
+        if search and str(search).lower() not in title.lower() \
+                and str(search).lower() not in _provider_text(row.get("eventLocation")).lower():
+            continue
+        if calendar_id and row.get("calendar_id") != str(calendar_id):
+            continue
+        events.append({
+            "id": row.get("event_id", ""),
+            "title": title,
+            "when": _fmt_when(row.get("begin")),
+            "begin": row.get("begin", ""),
+            "end": row.get("end", ""),
+            "all_day": row.get("allDay", "0") == "1",
+            "where": _provider_text(row.get("eventLocation")),
+            "calendar_id": row.get("calendar_id", ""),
+        })
+    return (events[:limit] if limit else events), ""
+
+
+def phone_add_event(dev_id, title, begin_ms, end_ms, calendar_id=1):
+    """(ok, message) — put one event on the phone. A write, so never implicit."""
+    title = str(title or "").strip()
+    if not title:
+        return False, "the event needs a title"
+    try:
+        begin_ms, end_ms = int(begin_ms), int(end_ms)
+    except (TypeError, ValueError):
+        return False, "start and end must be timestamps in milliseconds"
+    if end_ms <= begin_ms:
+        return False, "the end must come after the start"
+    ok, output = adb_shell(
+        dev_id,
+        f"content insert --uri {CALENDAR_EVENTS_URI} "
+        f"--bind title:s:{shlex.quote(title)} "
+        f"--bind dtstart:l:{begin_ms} --bind dtend:l:{end_ms} "
+        f"--bind eventTimezone:s:UTC --bind calendar_id:i:{int(calendar_id)}")
+    if not ok:
+        return False, content_error(output) or output[:200]
+    ok, rows, _ = content_query(
+        dev_id, CALENDAR_EVENTS_URI, ["_id"],
+        where=f"title={shlex.quote(title)} AND dtstart={begin_ms}")
+    if ok and rows:
+        return True, f"added '{title}' to the phone's calendar"
+    return True, f"added '{title}' (not verified on the phone)"
+
+
+def phone_delete_call(dev_id, call_id):
+    """(ok, message) — remove one call from the phone's log. Irreversible."""
+    try:
+        call_id = int(str(call_id).strip())
+    except (TypeError, ValueError):
+        return False, "not a call id"
+    ok, output = adb_shell(
+        dev_id, f"content delete --uri {CALL_LOG_URI} --where {shlex.quote(f'_id={call_id}')}")
+    if not ok:
+        return False, content_error(output) or output[:200]
+    ok, rows, _ = content_query(dev_id, CALL_LOG_URI, ["_id"], where=f"_id={call_id}")
+    if ok:
+        return (not rows), ("removed from the phone's call log" if not rows
+                            else "the phone still lists the call — it may refuse deletes")
+    return True, "delete sent (could not verify)"
+
+
+def _provider_count(dev_id, uri, where):
+    """Row count for one provider query, or None when the provider refuses.
+
+    The call screen's summary counts unread messages and unheard voicemails; a
+    ROM that refuses one of them shows a dash there rather than zero, which
+    would read as "all clear".
+    """
+    ok, rows, _ = content_query(dev_id, uri, ["_id"], where=where)
+    return len(rows) if ok else None
+
+
+def _day_label(ms):
+    """Which heading a call sits under: today, yesterday, or the weekday."""
+    try:
+        when = datetime.datetime.fromtimestamp(int(ms) / 1000)
+    except (TypeError, ValueError, OSError):
+        return "EARLIER"
+    today = datetime.date.today()
+    if when.date() == today:
+        return "TODAY"
+    if when.date() == today - datetime.timedelta(days=1):
+        return "YESTERDAY"
+    return when.strftime("%A %d %b").upper()
+
+
+def resolve_phone_device(alias=None):
+    """The device to read from: a named one, an adb id, or the only one online."""
+    if alias:
+        if alias in DEVICES:
+            target = check_and_connect(alias, interactive=True)
+            if not target:
+                console.print(f"[red]❌ {alias} is not reachable — run Doctor, or pair it again.[/red]")
+            return target
+        return alias                       # an adb id or ip:port
+    connected = get_connected_device_ids()
+    if not connected:
+        console.print("[red]❌ No device is connected. Plug one in, or run [bold]fenox pair[/bold].[/red]")
+        return None
+    if len(connected) > 1:
+        console.print("[yellow]More than one device is connected — pass [bold]--device <alias>[/bold]:[/yellow]")
+        for dev_id in connected:
+            console.print(f"  [dim]·[/dim] {dev_id}")
+        return None
+    return connected[0]
+
+
+def _phone_refused(what, error):
+    """Say exactly why nothing was shown, instead of showing nothing."""
+    console.print(Panel(
+        f"[yellow]The phone would not share its {what}.[/yellow]\n\n"
+        f"[dim]{error}[/dim]\n\n"
+        "[dim]The phone must have USB debugging on, and be unlocked once after "
+        "plugging in. Some ROMs also restrict what the adb shell user may read.[/dim]",
+        box=box.ROUNDED, border_style="yellow",
+        title=Text("CANNOT READ", style="yellow"), title_align="left", padding=(0, 1)))
+
+
+def _redact_body(body):
+    """Hide the words but keep the shape, so activity is still visible."""
+    return f"[{len(body)} characters hidden]"
+
+
+def print_message_threads(dev_id, args):
+    """Render the message thread list for the CLI."""
+    names = phone_contacts(dev_id)
+    redact = getattr(args, "redact", False)
+    threads, error = phone_threads(dev_id, names=names,
+                                   unread_only=getattr(args, "unread", False),
+                                   limit=getattr(args, "limit", None) or 25)
+    if error:
+        _phone_refused("messages", error)
+        return False
+    if getattr(args, "json_out", False):
+        print(json.dumps({"threads": [_public_thread(t, redact) for t in threads]}, indent=2))
+        return True
+    if not threads:
+        console.print("[yellow]No message threads to show.[/yellow]")
+        return True
+    table = Table(box=box.SIMPLE_HEAVY, header_style="bold bright_cyan", pad_edge=False)
+    table.add_column("Thread", justify="right", no_wrap=True, style="dim")
+    table.add_column("From", no_wrap=True, max_width=26)
+    table.add_column("When", no_wrap=True, style="dim")
+    table.add_column("Msgs", justify="right", style="dim")
+    table.add_column("Unread", justify="right")
+    table.add_column("Last message", overflow="ellipsis", no_wrap=True)
+    for thread in threads:
+        body = _redact_body(thread["snippet"]) if redact else thread["snippet"]
+        label = (f"…{re.sub(r'\\D', '', thread['address'])[-4:]}" if redact
+                 else thread["label"])
+        table.add_row(str(thread["thread_id"]), label, thread["when"], thread["count"],
+                      f"[bold yellow]{thread['unread']}[/bold yellow]" if thread["unread"] else "",
+                      f"[dim]{body}[/dim]")
+    console.print(table)
+    total_unread = sum(t["unread"] for t in threads)
+    console.print(f"[dim]{len(threads)} thread(s)"
+                  + (f" · {total_unread} unread" if total_unread else "") + "[/dim]")
+    return True
+
+
+def render_transcript(messages, key=None, redact=False):
+    """Print one conversation oldest-first, as a compact table."""
+    if not messages:
+        console.print("[yellow]No messages in this thread.[/yellow]")
+        return
+    table = Table(box=box.SIMPLE, header_style="bold bright_cyan", pad_edge=False)
+    table.add_column("When", no_wrap=True, style="dim")
+    table.add_column("Who", no_wrap=True, max_width=24)
+    table.add_column("#", justify="right", no_wrap=True, style="dim")
+    table.add_column("Message", overflow="fold")
+    for index, message in enumerate(messages, start=1):
+        arrow = "◀" if message["direction"] == "in" else "▶"
+        colour = "green" if message["direction"] == "in" else "cyan"
+        who = number_label(message["address"], key or {}, redact=redact)
+        body = _redact_body(message["body"]) if redact else message["body"]
+        unread = "" if message["read"] else "[bold yellow]•[/bold yellow] "
+        table.add_row(message["when"], f"[{colour}]{arrow}[/{colour}] {who}",
+                      str(index), f"{unread}{body}")
+    console.print(table)
+
+
+def export_transcript(path, messages, title, redact=False):
+    """Write a conversation to a file as plain text. Local only, never uploaded."""
+    target = os.path.expanduser(path)
+    try:
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(f"{title}\n" + "=" * len(title) + "\n\n")
+            for message in messages:
+                who = "me" if message["direction"] == "out" else "them"
+                body = _redact_body(message["body"]) if redact else message["body"]
+                f.write(f"[{message['when']}] {who}: {body}\n")
+    except OSError as exc:
+        console.print(f"[red]❌ Could not write {target}: {exc}[/red]")
+        return
+    console.print(f"[green]✅ Exported {len(messages)} message(s) to {_pretty_path(target)}[/green]")
+
+
+def print_messages(dev_id, args):
+    """CLI rendering for the messages resource: a thread, a search, or the list."""
+    names = phone_contacts(dev_id)
+    redact = getattr(args, "redact", False)
+    limit = getattr(args, "limit", None) or 25
+    thread_id = getattr(args, "thread", None)
+    if thread_id:
+        messages, error = phone_thread_messages(dev_id, thread_id, names=names, limit=limit)
+        if error:
+            _phone_refused("messages", error)
+            return
+        if getattr(args, "json_out", False):
+            print(json.dumps({"thread_id": thread_id,
+                              "messages": [_public_message(m, redact) for m in messages]}, indent=2))
+        else:
+            render_transcript(messages, names, redact)
+        if getattr(args, "export", None):
+            export_transcript(args.export, messages, f"Thread {thread_id}", redact)
+        if getattr(args, "mark_read", False):
+            ok, note = phone_mark_thread_read(dev_id, thread_id)
+            console.print(f"[{'green]✅' if ok else 'red]❌'} {note}[/]")
+        return
+    query = getattr(args, "search", None)
+    if query:
+        messages, error = phone_search_messages(dev_id, query, names=names, limit=limit)
+        if error:
+            _phone_refused("messages", error)
+            return
+        if getattr(args, "json_out", False):
+            print(json.dumps({"search": query,
+                              "messages": [_public_message(m, redact) for m in messages]}, indent=2))
+            return
+        if not messages:
+            console.print(f"[yellow]No messages match '{query}'.[/yellow]")
+            return
+        console.print(f"[dim]{len(messages)} message(s) matching[/dim] [bold]{query}[/bold]\n")
+        render_transcript(list(reversed(messages)), names, redact)
+        return
+    print_message_threads(dev_id, args)
+
+
+def _public_message(message, redact=False):
+    """A message as JSON, with the personal fields redacted on request."""
+    return {
+        "id": message["id"],
+        "from": "…" if redact else message["address"],
+        "label": "…" if redact else message["label"],
+        "when": message["when"],
+        "direction": message["direction"],
+        "read": message["read"],
+        "body": _redact_body(message["body"]) if redact else message["body"],
+    }
+
+
+# One mark and colour per call outcome, shared by the CLI table and the screens.
+CALL_MARKS = {"missed": ("✆", "red"), "incoming": ("↙", "green"),
+              "outgoing": ("↗", "cyan"), "rejected": ("⊘", "yellow"),
+              "blocked": ("⊘", "red"), "voicemail": ("✉", "bright_black"),
+              "answered elsewhere": ("↔", "bright_black"),
+              "call": ("·", "bright_black")}
+
+CALL_COLOURS = {kind: colour for kind, (_, colour) in CALL_MARKS.items()}
+
+
+def render_calls(calls, redact=False):
+    """Print a call list as a compact table, newest first."""
+    if not calls:
+        console.print("[yellow]No calls to show.[/yellow]")
+        return
+    table = Table(box=box.SIMPLE, header_style="bold bright_cyan", pad_edge=False)
+    table.add_column("", no_wrap=True)
+    table.add_column("Who", no_wrap=True, max_width=26)
+    table.add_column("When", no_wrap=True, style="dim")
+    table.add_column("Length", justify="right", no_wrap=True, style="dim")
+    table.add_column("Outcome", no_wrap=True)
+    for call in calls:
+        mark, colour = CALL_MARKS.get(call["kind"], CALL_MARKS["call"])
+        who = number_label(call["number"], {}, redact=redact)
+        table.add_row(f"[{colour}]{mark}[/{colour}]", who, call["when"],
+                      call["duration"],
+                      f"[{colour}]{call['kind']}[/{colour}]"
+                      + (" [bold yellow]new[/bold yellow]" if call["new"] else ""))
+    console.print(table)
+
+
+def export_calls(path, calls, redact=False):
+    """Write a call list to a file as plain text. Local only, never uploaded."""
+    target = os.path.expanduser(path)
+    try:
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("Fenox call log\n" + "=" * 14 + "\n\n")
+            for call in calls:
+                who = number_label(call["number"], {}, redact=redact)
+                f.write(f"[{call['when']}] {call['kind']:<17} {who} ({call['duration']})\n")
+    except OSError as exc:
+        console.print(f"[red]❌ Could not write {target}: {exc}[/red]")
+        return
+    console.print(f"[green]✅ Exported {len(calls)} call(s) to {_pretty_path(target)}[/green]")
+
+
+def print_calls(dev_id, args):
+    """CLI rendering for the call log: recent, missed, or one number's history."""
+    names = phone_contacts(dev_id)
+    redact = getattr(args, "redact", False)
+    kinds = [kind for kind in ("missed", "incoming", "outgoing")
+             if getattr(args, kind, False)]
+    number = getattr(args, "from_number", None)
+    days = getattr(args, "days", 30)
+    calls, error = phone_calls(dev_id, names=names, kinds=kinds or None, days=days,
+                               search=getattr(args, "search", None), number=number,
+                               limit=getattr(args, "limit", None) or 25)
+    if error:
+        _phone_refused("call log", error)
+        return False
+    if getattr(args, "dial", False):
+        if not number:
+            console.print("[yellow]--dial needs --from <number> — it has to know who "
+                          "to call.[/yellow]")
+            return False
+        _call_number(dev_id, number)
+        return True
+    if getattr(args, "json_out", False):
+        print(json.dumps({"calls": [_public_call(c, redact) for c in calls]}, indent=2))
+        return True
+    if not calls:
+        console.print(f"[yellow]No calls in the last {days} day(s).[/yellow]" if days
+                      else "[yellow]No calls to show.[/yellow]")
+        return True
+    if number:
+        console.print(f"[dim]History with[/dim] "
+                      f"[bold]{number_label(number, names, redact=redact)}[/bold]\n")
+    render_calls(calls, redact)
+    console.print(f"[dim]{len(calls)} call(s) · {phone_call_counts(calls)}"
+                  + (f" · last {days} days" if days else "") + "[/dim]")
+    if getattr(args, "export", None):
+        export_calls(args.export, calls, redact)
+    if getattr(args, "mark_read", False):
+        ok, note = phone_mark_calls_seen(dev_id, [c["id"] for c in calls])
+        console.print(f"[{'green' if ok else 'red'}]{'✅' if ok else '❌'} {note}[/]")
+    return True
+
+
+def _public_call(call, redact=False):
+    """A call as JSON, with the personal fields redacted on request."""
+    return {
+        "id": call["id"],
+        "number": "…" if redact else call["number"],
+        "label": "…" if redact else call["label"],
+        "when": call["when"],
+        "kind": call["kind"],
+        "duration": call["duration"],
+        "new": call["new"],
+    }
+
+
+def _call_number(dev_id, number):
+    """Place a call from the terminal. The shell user holds CALL_PHONE."""
+    digits = re.sub(r"[^\d+#*]", "", number or "")
+    if not digits:
+        console.print("[yellow]No number to call.[/yellow]")
+        return
+    if not Confirm.ask(f"[bold]Call {number}?[/bold] It dials on the phone now.", default=False):
+        return
+    # ACTION_CALL places the call, ACTION_DIAL only fills the dialler. The shell
+    # user is allowed CALL, but a few ROMs refuse it for background starts, so the
+    # dialler plus the call key is the fallback.
+    ok, _ = adb_shell(dev_id, f"am start -a android.intent.action.CALL -d tel:{digits}")
+    if not ok:
+        adb_shell(dev_id, f"am start -a android.intent.action.DIAL -d tel:{digits}")
+        time.sleep(1)
+        adb_shell(dev_id, "input keyevent KEYCODE_CALL")
+    console.print(f"[green]📞 Calling {number}[/green]")
+
+
+def _end_call(dev_id):
+    """Hang up, or dismiss the incoming call screen."""
+    adb_shell(dev_id, "input keyevent KEYCODE_ENDCALL")
+    console.print("[green]✅ Call ended[/green]")
+
+
+def _open_sms_composer(dev_id, number):
+    """Open the phone's messaging app with this number filled in.
+
+    Pressing Send from here would mean tapping the app's button by coordinates,
+    which moves between releases and would fail silently on the next update — so
+    this hands over to the phone until the companion app can send properly.
+    """
+    digits = re.sub(r"[^\d+#*]", "", number or "")
+    adb_shell(dev_id, f"am start -a android.intent.action.SENDTO -d sms:{digits}")
+    console.print("[green]📱 Opened the message composer on the phone.[/green]")
+    console.print("[dim]Sending without touching the phone needs the companion app; "
+                  "until then the phone asks for the send tap.[/dim]")
+
+
+def action_phone(args):
+    """`fenox phone <resource>` — read the phone's own data over adb."""
+    dev_id = resolve_phone_device(getattr(args, "device", None))
+    if not dev_id:
+        return
+    resource = getattr(args, "resource", None) or "messages"
+    if resource == "messages":
+        print_messages(dev_id, args)
+    elif resource == "calls":
+        print_calls(dev_id, args)
+    elif resource == "contacts":
+        print_contacts(dev_id, args)
+    elif resource == "calendar":
+        print_calendar(dev_id, args)
+
+
+def action_messages(dev_id):
+    """Read the phone's messages from the terminal: threads, then a transcript."""
+    names = phone_contacts(dev_id)
+    state = {"cursor": 0}
+    while True:
+        threads, error = phone_threads(dev_id, names=names, limit=40)
+        if error:
+            _phone_refused("messages", error)
+            return
+        if not threads:
+            console.print("[yellow]No message threads on this phone.[/yellow]")
+            _wait_any_key()
+            return
+        by_number = {str(i + 1): t for i, t in enumerate(threads)}
+        rows = [(None, "THREADS", "", 1)]
+        for number, thread in by_number.items():
+            unread = f"[bold yellow]{thread['unread']} unread[/bold yellow]" if thread["unread"] else f"[dim]{thread['count']} msgs[/dim]"
+            rows.append((number, f"📨 {thread['label']}",
+                         f"{thread['when']} · {unread} · {thread['snippet'][:44]}", 1))
+        rows.append((None, "ACTIONS", "", 2))
+        rows.append(("s", "Search all messages", "", 2))
+        rows.append(("r", "Reload from the phone", "", 2))
+        choice = run_menu(
+            f"📨  MESSAGES · {dev_id}",
+            rows,
+            breadcrumb=f"dashboard › device › messages · {len(threads)} thread(s)",
+            subtitle="read straight from the phone — nothing is uploaded",
+            accent="bright_cyan",
+            two_col=True,
+            state=state,
+        )
+        if choice is None:
+            return
+        if choice == "r":
+            names = phone_contacts(dev_id)
+            continue
+        if choice == "s":
+            query = Prompt.ask("Search messages for")
+            messages, error = phone_search_messages(dev_id, query, names=names)
+            if error:
+                _phone_refused("messages", error)
+            elif not messages:
+                console.print(f"[yellow]Nothing matches '{query}'.[/yellow]")
+            else:
+                render_transcript(list(reversed(messages)), names)
+            _wait_any_key()
+            continue
+        thread = by_number.get(choice)
+        if thread:
+            _message_thread_screen(dev_id, thread, names)
+            names = phone_contacts(dev_id)
+
+
+def _message_thread_screen(dev_id, thread, names):
+    """One conversation: read it, then act on it."""
+    messages, error = phone_thread_messages(dev_id, thread["thread_id"], names=names)
+    if error:
+        _phone_refused("messages", error)
+        _wait_any_key()
+        return
+    console.print(Panel(
+        f"[bold bright_white]{thread['label']}[/bold bright_white]\n"
+        f"[dim]{len(messages)} message(s) shown · {thread['count']} in total · "
+        f"last {thread['when']}[/dim]",
+        box=box.ROUNDED, border_style="bright_cyan", title_align="left",
+        title=Text("THREAD", style="bright_cyan"), padding=(0, 1)))
+    render_transcript(messages, names)
+    options = [
+        ("1", "Mark this thread as read"),
+        ("2", "Call this number"),
+        ("3", "Open it in the phone's messaging app"),
+        ("4", "Export this thread to a file"),
+    ]
+    while True:
+        choice = run_menu(f"📨  {thread['label']}", options,
+                          breadcrumb="dashboard › device › messages › thread",
+                          subtitle="sent messages need the phone's own app until the companion app lands",
+                          accent="bright_cyan")
+        if choice is None:
+            return
+        if choice == "1":
+            ok, note = phone_mark_thread_read(dev_id, thread["thread_id"])
+            console.print(f"[{'green' if ok else 'red'}]{'✅' if ok else '❌'} {note}[/]")
+        elif choice == "2":
+            _call_number(dev_id, thread["address"])
+        elif choice == "3":
+            _open_sms_composer(dev_id, thread["address"])
+        elif choice == "4":
+            default = os.path.expanduser(f"~/fenox-thread-{thread['thread_id']}.txt")
+            export_transcript(Prompt.ask("Write to", default=default), messages,
+                              f"Thread {thread['thread_id']} · {thread['label']}")
+        _wait_any_key()
+
+
+def _public_thread(thread, redact=False):
+    """A thread as JSON, with the personal fields redacted on request."""
+    return {
+        "thread_id": thread["thread_id"],
+        "address": "…" if redact else thread["address"],
+        "label": (f"…{re.sub(r'\\D', '', thread['address'])[-4:]}" if redact else thread["label"]),
+        "when": thread["when"],
+        "messages": thread["count"],
+        "unread": thread["unread"],
+        "snippet": _redact_body(thread["snippet"]) if redact else thread["snippet"],
+    }
+
+def _parse_when(text):
+    """A human time as epoch milliseconds, or None when it cannot be read.
+
+    Accepts `HH:MM` (today, or tomorrow once that time has passed) and
+    `YYYY-MM-DD HH:MM` — the two forms a person actually types. Deliberately not
+    a date library: three patterns, checked in order.
+    """
+    text = str(text or "").strip()
+    now = datetime.datetime.now()
+    for pattern, to_dt in (
+            ("%H:%M", lambda base: base if base > now else base + datetime.timedelta(days=1)),
+            ("%Y-%m-%d %H:%M", lambda base: base),
+            ("%Y-%m-%d", lambda base: base),
+    ):
+        try:
+            base = datetime.datetime.strptime(text, pattern)
+        except ValueError:
+            continue
+        return int(to_dt(base).timestamp() * 1000)
+    return None
+
+
+def _fmt_range(event):
+    """One event's span the way a person reads it."""
+    try:
+        begin = datetime.datetime.fromtimestamp(int(event["begin"]) / 1000)
+        end = datetime.datetime.fromtimestamp(int(event["end"]) / 1000)
+    except (TypeError, ValueError, OSError, KeyError):
+        return event.get("when", "—")
+    if event.get("all_day"):
+        return f"{begin.strftime('%d %b')} (all day)"
+    same_day = begin.date() == end.date()
+    tail = end.strftime("%H:%M") if same_day else end.strftime("%d %b %H:%M")
+    return f"{begin.strftime('%d %b %H:%M')}–{tail}"
+
+
+def print_contacts(dev_id, args):
+    """CLI rendering for contacts: the phone book, searchable."""
+    redact = getattr(args, "redact", False)
+    contacts, error = phone_contact_rows(
+        dev_id, search=getattr(args, "search", None),
+        limit=getattr(args, "limit", None) or 40)
+    if error:
+        _phone_refused("contacts", error)
+        return False
+    if getattr(args, "json_out", False):
+        print(json.dumps({"contacts": [
+            {"name": "…" if redact else c["name"],
+             "number": f"…{re.sub(r'\\D', '', c['number'])[-4:]}" if redact else c["number"],
+             "type": c["type"]} for c in contacts]}, indent=2))
+        return True
+    if not contacts:
+        console.print("[yellow]No contacts match." +
+                      ("" if getattr(args, "search", None) else " The phone shares none — "
+                       "unlock it once after plugging in.") + "[/yellow]")
+        return True
+    table = Table(box=box.SIMPLE_HEAVY, header_style="bold bright_cyan", pad_edge=False)
+    table.add_column("Name", no_wrap=True, max_width=30)
+    table.add_column("Number", no_wrap=True)
+    table.add_column("Type", style="dim")
+    for contact in contacts:
+        number = (f"…{re.sub(r'\\D', '', contact['number'])[-4:]}" if redact
+                  else contact["number"])
+        table.add_row(contact["name"], number, contact["type"])
+    console.print(table)
+    console.print(f"[dim]{len(contacts)} contact(s)"
+                  + (f" · matching '{args.search}'" if getattr(args, "search", None) else "")
+                  + "[/dim]")
+    if getattr(args, "export", None):
+        target = os.path.expanduser(args.export)
+        try:
+            with open(target, "w", encoding="utf-8") as f:
+                for contact in contacts:
+                    f.write(f"{contact['name']}\t{contact['number']}\n")
+            console.print(f"[green]✅ Exported {len(contacts)} contact(s) to {_pretty_path(target)}[/green]")
+        except OSError as exc:
+            console.print(f"[red]❌ Could not write {target}: {exc}[/red]")
+    return True
+
+
+def print_calendar(dev_id, args):
+    """CLI rendering for the calendar: upcoming occurrences, or adding one."""
+    redact = getattr(args, "redact", False)
+    title = getattr(args, "add", None)
+    if title:
+        begin = _parse_when(getattr(args, "at", None))
+        if begin is None:
+            console.print("[yellow]--add needs --at, as `HH:MM` or `YYYY-MM-DD HH:MM`.[/yellow]")
+            return False
+        end = begin + int(getattr(args, "duration", None) or 60) * 60_000
+        ok, note = phone_add_event(dev_id, title, begin, end,
+                                   calendar_id=getattr(args, "calendar", None) or 1)
+        console.print(f"[{'green' if ok else 'red'}]{'✅' if ok else '❌'} {note}[/]")
+        if not ok:
+            return False
+    days = getattr(args, "days", None)
+    days = 7 if days is None else days
+    events, error = phone_events(dev_id, days=days,
+                                 calendar_id=getattr(args, "calendar", None),
+                                 search=getattr(args, "search", None),
+                                 limit=getattr(args, "limit", None) or 30)
+    if error:
+        _phone_refused("calendar", error)
+        return False
+    if getattr(args, "json_out", False):
+        print(json.dumps({"days": days, "events": [
+            {"title": "…" if redact else e["title"],
+             "when": e["when"], "range": _fmt_range(e),
+             "where": "" if redact else e["where"]} for e in events]}, indent=2))
+        return True
+    if not events:
+        console.print(f"[yellow]Nothing on the calendar in the next {days} day(s).[/yellow]")
+        return True
+    table = Table(box=box.SIMPLE_HEAVY, header_style="bold bright_cyan", pad_edge=False)
+    table.add_column("When", no_wrap=True, style="dim")
+    table.add_column("Event", overflow="fold")
+    table.add_column("Where", style="dim", overflow="ellipsis", no_wrap=True, max_width=24)
+    for event in events:
+        shown = _redact_body(event["title"]) if redact else event["title"]
+        table.add_row(_fmt_range(event), shown,
+                      "" if redact else event["where"])
+    console.print(table)
+    console.print(f"[dim]{len(events)} event(s) · next {days} days[/dim]")
+    if getattr(args, "export", None):
+        target = os.path.expanduser(args.export)
+        try:
+            with open(target, "w", encoding="utf-8") as f:
+                for event in events:
+                    f.write(f"[{_fmt_range(event)}] {event['title']}"
+                            + (f" @ {event['where']}" if event["where"] else "") + "\n")
+            console.print(f"[green]✅ Exported {len(events)} event(s) to {_pretty_path(target)}[/green]")
+        except OSError as exc:
+            console.print(f"[red]❌ Could not write {target}: {exc}[/red]")
+    return True
+
+
+def action_calls(dev_id):
+    """The phone's call log in the terminal: recent calls, then act on one."""
+    names = phone_contacts(dev_id)
+    state = {"cursor": 0, "missed_only": False}
+    while True:
+        window, error = phone_calls(dev_id, names=names, days=30)
+        if error:
+            _phone_refused("call log", error)
+            _wait_any_key()
+            return
+        if not window:
+            console.print("[yellow]No calls in the last 30 days on this phone.[/yellow]")
+            _wait_any_key()
+            return
+        unread_total = _provider_count(dev_id, SMS_INBOX_URI, "read=0")
+        vm_count = _provider_count(dev_id, SMS_URI, "type=4")
+        calls = [c for c in window if c["kind"] == "missed"] if state["missed_only"] \
+            else list(window)
+        if not calls:
+            console.print("[green]Nothing was missed — every call in the last 30 days "
+                          "was answered or dialled out.[/green]")
+            _wait_any_key()
+            state["missed_only"] = False
+            continue
+        calls = calls[:40]
+        by_number = {str(i + 1): call for i, call in enumerate(calls)}
+        # One full-width line above the list: every number on this phone is on its
+        # way to being either an unread message, an unlistened voicemail, a missed
+        # call to return, or all squared away.
+        # Compact on purpose: the line must survive an 80-column terminal unwrapped.
+        # A count the phone refuses to give is a dash, not a zero: zero would read
+        # as all-clear when it is really "cannot see".
+        unread_part = "—" if unread_total is None else f"{unread_total} unread"
+        vm_part = "—" if vm_count is None else f"{vm_count} unheard"
+        missed_count = len([c for c in window if c["kind"] == "missed"])
+        summary = (f"💬 {unread_part}   ·   ✉ {vm_part}   ·   "
+                   f"✆ {missed_count} missed · last 30 days")
+        # Grouped by day, newest first: the way the phone's own app arranges a log,
+        # and easier to scan than one flat list when days blur together.
+        rows = []
+        current_day = None
+        for number, call in by_number.items():
+            day = _day_label(call["date"])
+            if day != current_day:
+                rows.append((None, day, "", 1))
+                current_day = day
+            mark, colour = CALL_MARKS.get(call["kind"], CALL_MARKS["call"])
+            outcome = "[bold yellow]new[/bold yellow]" if call["new"] \
+                else f"[dim]{call['kind']}[/dim]"
+            rows.append((number, f"[{colour}]{mark}[/{colour}] {call['label']}",
+                         f"{call['when'].split()[-1] if ' ' in call['when'] else call['when']}"
+                         f" · {outcome} · {call['duration']}", 1))
+        rows.append((None, "ACTIONS", "", 2))
+        rows.append(("d", "Dial a number…", "", 2))
+        rows.append(("m", "Show every call" if state["missed_only"] else "Show missed only",
+                     "", 2))
+        rows.append(("s", "Search by number or name…", "", 2))
+        rows.append(("e", "Export the call log to a file", "", 2))
+        rows.append(("r", "Reload from the phone", "", 2))
+        missed_note = " · showing missed only" if state["missed_only"] else ""
+        choice = run_menu(
+            f"📞  CALL LOG · {dev_id}",
+            rows,
+            breadcrumb=f"dashboard › device › calls · {len(window)} call(s) in 30 days{missed_note}",
+            subtitle="read from the phone itself — nothing dials or deletes without asking",
+            body=Text.from_markup(f"  [bright_cyan]{summary}[/bright_cyan]"),
+            accent="bright_cyan",
+            two_col=True,
+            state=state,
+        )
+        if choice is None:
+            return
+        if choice == "m":
+            state["missed_only"] = not state["missed_only"]
+            state["cursor"] = 0
+            continue
+        if choice == "r":
+            names = phone_contacts(dev_id)
+            continue
+        if choice == "d":
+            number = Prompt.ask("Number to call")
+            if str(number).strip():
+                _call_number(dev_id, number)
+                _wait_any_key()
+            continue
+        if choice == "s":
+            query = Prompt.ask("Search calls by number or name")
+            found, error = phone_calls(dev_id, names=names, days=0, search=query)
+            if error:
+                _phone_refused("call log", error)
+            elif not found:
+                console.print(f"[yellow]Nothing matches '{query}'.[/yellow]")
+            else:
+                render_calls(found[:40])
+                console.print(f"[dim]{len(found)} call(s) · {phone_call_counts(found)}[/dim]")
+            _wait_any_key()
+            continue
+        if choice == "e":
+            export_calls(Prompt.ask("Write to",
+                                    default=os.path.expanduser("~/fenox-calls.txt")), calls)
+            _wait_any_key()
+            continue
+        call = by_number.get(choice)
+        if call:
+            _call_detail_screen(dev_id, call, names)
+            names = phone_contacts(dev_id)
+
+
+def action_contacts(dev_id):
+    """The phone's address book in the terminal: search, call, message."""
+    state = {"cursor": 0, "query": ""}
+    while True:
+        contacts, error = phone_contact_rows(dev_id, search=state["query"] or None, limit=40)
+        if error:
+            _phone_refused("contacts", error)
+            _wait_any_key()
+            return
+        if not contacts:
+            console.print("[yellow]" + (f"No contact matches '{state['query']}'." if state["query"]
+                                        else "The phone shares no contacts — unlock it once "
+                                             "after plugging in.") + "[/yellow]")
+            _wait_any_key()
+            return
+        by_number = {str(i + 1): contact for i, contact in enumerate(contacts)}
+        rows = [(None, f"CONTACTS · {len(contacts)} shown", "", 1)]
+        for number, contact in by_number.items():
+            rows.append((number, f"👤 {contact['name']}",
+                         f"{contact['number']}" + (f" · {contact['type']}" if contact["type"] else ""), 1))
+        rows.append((None, "ACTIONS", "", 2))
+        rows.append(("c", "Call a number…", "", 2))
+        rows.append(("s", "Search contacts…", "", 2))
+        rows.append(("e", "Export to a file", "", 2))
+        rows.append(("r", "Reload from the phone", "", 2))
+        choice = run_menu(
+            "👤  CONTACTS",
+            rows,
+            breadcrumb=f"dashboard › device › contacts"
+                       + (f" · matching '{state['query']}'" if state["query"] else ""),
+            subtitle="read from the phone itself — nothing is uploaded",
+            accent="bright_cyan",
+            two_col=True,
+            state=state,
+        )
+        if choice is None:
+            return
+        if choice == "c":
+            _call_number(dev_id, Prompt.ask("Number to call"))
+            _wait_any_key()
+            continue
+        if choice == "s":
+            state["query"] = Prompt.ask("Search contacts by name or number").strip()
+            state["cursor"] = 0
+            continue
+        if choice == "r":
+            continue
+        if choice == "e":
+            target = os.path.expanduser(Prompt.ask(
+                "Write to", default=os.path.expanduser("~/fenox-contacts.tsv")))
+            try:
+                with open(target, "w", encoding="utf-8") as f:
+                    for contact in contacts:
+                        f.write(f"{contact['name']}\t{contact['number']}\n")
+                console.print(f"[green]✅ Exported {len(contacts)} contact(s) to {_pretty_path(target)}[/green]")
+            except OSError as exc:
+                console.print(f"[red]❌ Could not write {target}: {exc}[/red]")
+            _wait_any_key()
+            continue
+        contact = by_number.get(choice)
+        if contact:
+            _contact_detail_screen(dev_id, contact)
+
+
+def _contact_detail_screen(dev_id, contact):
+    """One contact: reach them, or find them elsewhere in the phone's data."""
+    console.print(Panel(
+        f"[bold bright_white]{contact['name']}[/bold bright_white]\n"
+        f"[dim]{contact['number']}" + (f" · {contact['type']}" if contact["type"] else "") + "[/dim]",
+        box=box.ROUNDED, border_style="bright_cyan", title_align="left",
+        title=Text("👤 CONTACT", style="bright_cyan"), padding=(0, 1)))
+    options = [
+        ("1", f"Call {contact['number']}"),
+        ("2", "Open it in the phone's dialler"),
+        ("3", "Send a message"),
+        ("4", "Every call with this number"),
+        ("5", "Messages with this number"),
+    ]
+    while True:
+        choice = run_menu(f"👤  {contact['name']}", options,
+                          breadcrumb="dashboard › device › contacts › contact",
+                          subtitle="nothing is dialled until you confirm it",
+                          accent="bright_cyan")
+        if choice is None:
+            return
+        if choice == "1":
+            _call_number(dev_id, contact["number"])
+        elif choice == "2":
+            digits = re.sub(r"[^\d+#*]", "", contact["number"] or "")
+            adb_shell(dev_id, f"am start -a android.intent.action.DIAL -d tel:{digits}")
+            console.print("[green]📱 Opened the dialler with this number.[/green]")
+        elif choice == "3":
+            _open_sms_composer(dev_id, contact["number"])
+        elif choice == "4":
+            history, error = phone_calls(dev_id, days=0, number=contact["number"])
+            if error:
+                _phone_refused("call log", error)
+            else:
+                render_calls(history)
+                console.print(f"[dim]{len(history)} call(s) · {phone_call_counts(history)}[/dim]")
+        elif choice == "5":
+            found, error = phone_search_messages(dev_id, re.sub(r"\D", "", contact["number"]), limit=30)
+            if error:
+                _phone_refused("messages", error)
+            elif not found:
+                console.print("[yellow]No messages with this number.[/yellow]")
+            else:
+                render_transcript(list(reversed(found)), phone_contacts(dev_id))
+        _wait_any_key()
+
+
+def action_calendar(dev_id):
+    """The phone's calendar in the terminal: upcoming, searched, and addable."""
+    state = {"cursor": 0, "days": 7}
+    while True:
+        events, error = phone_events(dev_id, days=state["days"], limit=40)
+        if error:
+            _phone_refused("calendar", error)
+            _wait_any_key()
+            return
+        if not events:
+            console.print(f"[yellow]Nothing on the calendar in the next {state['days']} day(s)." "[/yellow]")
+            _wait_any_key()
+            state["days"] = min(state["days"] * 2, 90)
+            continue
+        by_number = {str(i + 1): event for i, event in enumerate(events)}
+        rows = [(None, f"UPCOMING · {state['days']} days", "", 1)]
+        for number, event in by_number.items():
+            marker = "☀" if event["all_day"] else "🕐"
+            rows.append((number, f"{marker} {event['title']}", _fmt_range(event), 1))
+        rows.append((None, "ACTIONS", "", 2))
+        rows.append(("a", "Add an event…", "", 2))
+        rows.append(("w", "Widen the window" if state["days"] < 90 else "Window is 90 days", "", 2))
+        rows.append(("s", "Search events…", "", 2))
+        rows.append(("e", "Export to a file", "", 2))
+        rows.append(("r", "Reload from the phone", "", 2))
+        choice = run_menu(
+            f"📅  CALENDAR · {dev_id}",
+            rows,
+            breadcrumb=f"dashboard › device › calendar · next {state['days']} days",
+            subtitle="recurring events appear every time they occur",
+            accent="bright_cyan",
+            two_col=True,
+            state=state,
+        )
+        if choice is None:
+            return
+        if choice == "a":
+            title = Prompt.ask("Event title").strip()
+            if not title:
+                continue
+            at = Prompt.ask("When (HH:MM, or YYYY-MM-DD HH:MM)",
+                            default=datetime.datetime.now().strftime("%H:%M"))
+            begin = _parse_when(at)
+            if begin is None:
+                console.print("[yellow]Could not read that time — nothing added.[/yellow]")
+                _wait_any_key()
+                continue
+            minutes = Prompt.ask("Length in minutes", default="60")
+            try:
+                end = begin + int(minutes) * 60_000
+            except ValueError:
+                end = begin + 3_600_000
+            ok, note = phone_add_event(dev_id, title, begin, end)
+            console.print(f"[{'green' if ok else 'red'}]{'✅' if ok else '❌'} {note}[/]")
+            _wait_any_key()
+            continue
+        if choice == "w":
+            state["days"] = min(state["days"] * 2, 90)
+            state["cursor"] = 0
+            continue
+        if choice == "s":
+            query = Prompt.ask("Search event titles").strip()
+            found, error = phone_events(dev_id, days=90, search=query or None)
+            if error:
+                _phone_refused("calendar", error)
+            elif not found:
+                console.print(f"[yellow]Nothing matches '{query}'.[/yellow]")
+            else:
+                for event in found[:20]:
+                    console.print(f"  [dim]{_fmt_range(event)}[/dim] {event['title']}")
+            _wait_any_key()
+            continue
+        if choice == "e":
+            target = os.path.expanduser(Prompt.ask(
+                "Write to", default=os.path.expanduser("~/fenox-calendar.txt")))
+            try:
+                with open(target, "w", encoding="utf-8") as f:
+                    for event in events:
+                        f.write(f"[{_fmt_range(event)}] {event['title']}"
+                                + (f" @ {event['where']}" if event["where"] else "") + "\n")
+                console.print(f"[green]✅ Exported {len(events)} event(s) to {_pretty_path(target)}[/green]")
+            except OSError as exc:
+                console.print(f"[red]❌ Could not write {target}: {exc}[/red]")
+            _wait_any_key()
+            continue
+        if choice == "r":
+            continue
+        event = by_number.get(choice)
+        if event:
+            console.print(Panel(
+                f"[bold bright_white]{event['title']}[/bold bright_white]\n"
+                f"[dim]{_fmt_range(event)}" + (f" · {event['where']}" if event["where"] else "") + "[/dim]",
+                box=box.ROUNDED, border_style="bright_cyan", title_align="left",
+                title=Text("EVENT", style="bright_cyan"), padding=(0, 1)))
+            _wait_any_key()
+
+
+def _call_detail_screen(dev_id, call, names):
+    """One call: what happened, then what to do about it."""
+    mark, colour = CALL_MARKS.get(call["kind"], CALL_MARKS["call"])
+    console.print(Panel(
+        f"[bold bright_white]{call['label']}[/bold bright_white]\n"
+        f"[dim]{call['kind']} · {call['when']} · length {call['duration']}"
+        + (" · flagged new on the phone" if call["new"] else "") + "[/dim]",
+        box=box.ROUNDED, border_style=colour, title_align="left",
+        title=Text(f"{mark} CALL", style=colour), padding=(0, 1)))
+    options = [
+        ("1", f"Call {call['number']} back"),
+        ("2", "Open it in the phone's dialler"),
+        ("3", "Send a message instead"),
+        ("4", "Every call with this number"),
+        ("5", "Export this history to a file"),
+        ("6", "Remove this call from the log"),
+    ]
+    while True:
+        choice = run_menu(f"📞  {call['label']}", options,
+                          breadcrumb="dashboard › device › calls › call",
+                          subtitle="nothing is dialled or deleted until you confirm it",
+                          accent="bright_cyan")
+        if choice is None:
+            return
+        if choice == "1":
+            _call_number(dev_id, call["number"])
+        elif choice == "2":
+            digits = re.sub(r"[^\d+#*]", "", call["number"] or "")
+            adb_shell(dev_id, f"am start -a android.intent.action.DIAL -d tel:{digits}")
+            console.print("[green]📱 Opened the dialler with this number.[/green]")
+        elif choice == "3":
+            _open_sms_composer(dev_id, call["number"])
+        elif choice == "4":
+            history, error = phone_calls(dev_id, names=names, days=0, number=call["number"])
+            if error:
+                _phone_refused("call log", error)
+            else:
+                render_calls(history)
+                console.print(f"[dim]{len(history)} call(s) · {phone_call_counts(history)}[/dim]")
+            _wait_any_key()
+            continue
+        elif choice == "5":
+            history, error = phone_calls(dev_id, names=names, days=0, number=call["number"])
+            if error:
+                _phone_refused("call log", error)
+            else:
+                tail = re.sub(r"\D", "", call["number"])[-6:] or "history"
+                export_calls(Prompt.ask(
+                    "Write to", default=os.path.expanduser(f"~/fenox-calls-{tail}.txt")),
+                    history)
+            _wait_any_key()
+            continue
+        elif choice == "6":
+            if not Confirm.ask(
+                    f"[bold red]Remove this {call['kind']} call from the phone's log?[/bold red] "
+                    "It cannot be undone.", default=False):
+                console.print("[dim]Kept.[/dim]")
+                _wait_any_key()
+                continue
+            ok, note = phone_delete_call(dev_id, call["id"])
+            console.print(f"[{'green' if ok else 'red'}]{'✅' if ok else '❌'} {note}[/]")
+            if ok:
+                _wait_any_key()
+                return                     # it is gone; nothing to show here now
+            _wait_any_key()
+            continue
+        _wait_any_key()
+
 
 def _device_summary(key):
     """One-line status for a device, from config only (cheap, safe to redraw)."""
@@ -3025,7 +4570,8 @@ def _device_summary(key):
         if info.get("serial"):
             bits.append(str(info["serial"]))
     elif info.get("ip"):
-        bits.append(f"{info.get('ip')}:{info.get('port', '')}")
+        bits.append(f"{info.get('ip')}:{info['port']}" if info.get("port")
+                    else str(info.get("ip")))
     if not is_device_enabled(info):
         bits.append("disabled")
     return " · ".join(bits)
@@ -3049,168 +4595,179 @@ def _rename_device_prompt():
     action_rename_device(Prompt.ask("Device to rename", choices=list(DEVICES.keys())))
 
 def device_actions(key):
-    """Per-device Command Center: grouped categories first, expert keypad on demand."""
+    """Every action for one device on a single screen, grouped by category.
+
+    The whole toolset is visible at once and numbered continuously, so any action
+    is one typed number away instead of being buried in a category sub-menu.
+    """
     if key not in DEVICES:
         return
-    categories = [
-        ("1", "🖥  Screen & input", _device_screen_menu),
-        ("2", "📦  Apps", _device_apps_menu),
-        ("3", "📁  Files", _device_files_menu),
-        ("4", "🔧  Device control", _device_control_menu),
-        ("5", "🔗  Dev tools", _device_devtools_menu),
-        ("6", "⚙️   Configure device", _device_config_menu),
-        ("e", "⌨️   Expert keypad — every action on one screen", _device_actions_expert),
-    ]
+    rows, handlers, number = [], {}, 0
+    for section, column, actions in _device_action_sections(key):
+        rows.append((None, section, "", column))
+        for label, needs_device, handler in actions:
+            number += 1
+            rows.append((str(number), label, "", column))
+            handlers[str(number)] = (needs_device, handler)
     while True:
         choice = run_menu(
-            key.upper(),
-            [(k, label) for k, label, _ in categories],
+            f"📱  {key.upper()}",
+            rows,
             breadcrumb="dashboard › device",
             subtitle=_device_summary(key),
             accent="bright_cyan",
+            two_col=True,
         )
         if choice is None:
             return
-        if choice == "":
-            continue
-        for k, _, fn in categories:
-            if choice == k:
-                fn(key)
-                break
-
-def _device_actions_expert(key):
-    while True:
-        console.clear()
-        _device_header(key)
-        console.print()
-        console.print(Panel(
-            "[bold bright_cyan]1[/bold bright_cyan] Mirror    [bold bright_cyan]2[/bold bright_cyan] Screenshot   [bold bright_cyan]3[/bold bright_cyan] Record     [bold bright_cyan]4[/bold bright_cyan] Wake        [bold bright_cyan]5[/bold bright_cyan] Lock\n"
-            "[bold bright_cyan]6[/bold bright_cyan] Type      [bold bright_cyan]7[/bold bright_cyan] Tap XY       [bold bright_cyan]8[/bold bright_cyan] Swipe      [bold bright_cyan]9[/bold bright_cyan] Keys\n"
-            "[bold bright_cyan]A[/bold bright_cyan] Clip→dev [bold bright_cyan]B[/bold bright_cyan] Read clip     [bold bright_cyan]C[/bold bright_cyan] Open URL",
-            title="[bold bright_cyan]🖥 SCREEN & INPUT[/bold bright_cyan]", box=box.ROUNDED, border_style="dim cyan", padding=(0, 1)))
-        console.print(Panel(
-            "[bold bright_green]D[/bold bright_green] Open app  [bold bright_green]E[/bold bright_green] List apps    [bold bright_green]F[/bold bright_green] Uninstall  [bold bright_green]G[/bold bright_green] Clear data  [bold bright_green]H[/bold bright_green] Force stop\n"
-            "[bold bright_green]I[/bold bright_green] App info  [bold bright_green]J[/bold bright_green] Install APK  [bold bright_green]K[/bold bright_green] Nuke + relaunch",
-            title="[bold bright_green]📦 APPS[/bold bright_green]", box=box.ROUNDED, border_style="dim green", padding=(0, 1)))
-        console.print(Panel(
-            "[bold bright_yellow]L[/bold bright_yellow] Push      [bold bright_yellow]M[/bold bright_yellow] Pull         [bold bright_yellow]N[/bold bright_yellow] Browse",
-            title="[bold bright_yellow]📁 FILES[/bold bright_yellow]", box=box.ROUNDED, border_style="dim yellow", padding=(0, 1)))
-        console.print(Panel(
-            "[bold bright_magenta]O[/bold bright_magenta] Reboot    [bold bright_magenta]P[/bold bright_magenta] WiFi         [bold bright_magenta]Q[/bold bright_magenta] Data        [bold bright_magenta]R[/bold bright_magenta] BT          [bold bright_magenta]S[/bold bright_magenta] Volume\n"
-            "[bold bright_magenta]T[/bold bright_magenta] Bright    [bold bright_magenta]U[/bold bright_magenta] Shell",
-            title="[bold bright_magenta]🔧 CONTROL[/bold bright_magenta]", box=box.ROUNDED, border_style="dim magenta", padding=(0, 1)))
-        console.print(Panel(
-            "[bold bright_white]V[/bold bright_white] Info      [bold bright_white]W[/bold bright_white] Battery      [bold bright_white]X[/bold bright_white] Network     [bold bright_white]Y[/bold bright_white] Storage    [bold bright_white]Z[/bold bright_white] Processes\n"
-            "[bold bright_white]0[/bold bright_white] Health    [bold bright_white]#[/bold bright_white] Notify       [bold bright_white]@[/bold bright_white] Bind        [bold bright_white]~[/bold bright_white] App logs",
-            title="[bold bright_white]🔗 DEV TOOLS[/bold bright_white]", box=box.ROUNDED, border_style="dim white", padding=(0, 1)))
-        console.print(
-            "  [bold bright_green]e[/bold bright_green] Edit  [bold bright_yellow]g[/bold bright_yellow] Toggle  [bold bright_red]h[/bold bright_red] Remove  [bold bright_cyan]d[/bold bright_cyan] Refresh  [bold bright_red]b[/bold bright_red] ⬅ Back")
-        console.print()
-        c = Prompt.ask("[bold bright_white]▸[/bold bright_white] [dim]command[/dim]", default="b")
-        if c == "b": return
-        did = check_and_connect(key, interactive=True)
-        # ── Screen & Input ───────────────────────────────────────
-        if c == "1": action_mirror(key)
-        elif c == "2": action_media(key, "screenshot")
-        elif c == "3": action_media(key, "record")
-        elif c == "4" and did: run_cmd(f"adb -s {did} shell input keyevent KEYCODE_WAKEUP"); console.print("[green]✅ Woken[/green]")
-        elif c == "5" and did: run_cmd(f"adb -s {did} shell input keyevent KEYCODE_SLEEP"); console.print("[green]✅ Locked[/green]")
-        elif c == "6" and did: _action_type_text(did)
-        elif c == "7" and did: _action_tap_screen(did)
-        elif c == "8" and did: _action_swipe(did)
-        elif c == "9" and did: _action_key_combo(did)
-        elif c.upper() == "A" and did: _action_clipboard_copy(did)
-        elif c.upper() == "B" and did: _action_clipboard_read(did)
-        elif c.upper() == "C" and did: _action_open_url(did)
-        # ── Apps ─────────────────────────────────────────────────
-        elif c.upper() == "D" and did and APPS:
-            ak = Prompt.ask("App", choices=list(APPS.keys())); action_open(ak, key)
-        elif c.upper() == "E" and did: _action_list_apps(did)
-        elif c.upper() == "F" and did: _action_uninstall_app(did)
-        elif c.upper() == "G" and did: _action_clear_app_data(did)
-        elif c.upper() == "H" and did: _action_force_stop(did)
-        elif c.upper() == "I" and did: _action_app_info(did)
-        elif c.upper() == "J" and did: _action_install_apk_from_pc(did)
-        elif c.upper() == "K" and did and APPS:
-            ak = Prompt.ask("App", choices=list(APPS.keys())); action_nuke(ak, key)
-        # ── Files ────────────────────────────────────────────────
-        elif c.upper() == "L" and did: _action_push_file(did)
-        elif c.upper() == "M" and did: _action_pull_file(did)
-        elif c.upper() == "N" and did: _action_browse_storage(did)
-        # ── Control ──────────────────────────────────────────────
-        elif c.upper() == "O" and did: _action_reboot_menu(did)
-        elif c.upper() == "P" and did: _action_toggle_wifi(did)
-        elif c.upper() == "Q" and did: _action_toggle_data(did)
-        elif c.upper() == "R" and did: _action_toggle_bluetooth(did)
-        elif c.upper() == "S" and did: _action_volume_control(did)
-        elif c.upper() == "T" and did: _action_brightness_control(did)
-        elif c.upper() == "U" and did: _action_interactive_shell(did)
-        # ── Dev Tools ────────────────────────────────────────────
-        elif c.upper() == "V" and did: _action_device_info_dashboard(did)
-        elif c.upper() == "W" and did: _action_battery_info(did)
-        elif c.upper() == "X" and did: _action_network_info(did)
-        elif c.upper() == "Y" and did: _action_storage_info(did)
-        elif c.upper() == "Z" and did: _action_running_processes(did)
-        elif c == "0" and did: _action_health_monitor(did)
-        elif c == "#" and did:
-            console.print("  [cyan]1[/cyan] Send notification  [cyan]2[/cyan] Read notifications")
-            sub = Prompt.ask("Pick", default="1")
-            if sub == "1": _action_send_notification(did)
-            elif sub == "2": _action_read_notifications(did)
-        elif c == "@" and did and APPS:
-            ak = Prompt.ask("App", choices=list(APPS.keys())); action_bind(ak, key)
-        elif c == "~" and did and APPS:
-            ak = Prompt.ask("App", choices=list(APPS.keys())); action_logs(ak, key)
-        # ── Config ───────────────────────────────────────────────
-        elif c == "e":
-            info = DEVICES[key]
-            nip = Prompt.ask("IP", default=info.get("ip", ""))
-            npt = Prompt.ask("Port", default=str(info.get("port", "")))
-            nmd = Prompt.ask("Model", default=info.get("model", ""))
-            DEVICES[key] = {**info, "ip": nip, "port": npt, "model": nmd}
-            save_config(); console.print("[green]✅ Updated[/green]")
-        elif c == "g":
-            DEVICES[key]["disabled"] = not DEVICES[key].get("disabled", False)
-            save_config(); console.print(f"[green]✅ {'Disabled' if DEVICES[key].get('disabled') else 'Enabled'}[/green]")
-        elif c == "h":
-            if Confirm.ask(f"[red]Remove '{key}'?[/red]"):
-                del DEVICES[key]; save_config(); console.print("[green]✅ Removed[/green]"); return
-        elif c == "d": continue
+        needs_device, handler = handlers[choice]
+        dev_id = check_and_connect(key, interactive=True) if needs_device else None
+        if needs_device and not dev_id:
+            console.print(f"[red]❌ {key} is not reachable right now — run Doctor, or pair it again.[/red]")
+        else:
+            handler(dev_id)
         _wait_any_key()
 
+# --- Per-device actions -------------------------------------------------------
+# Every action is one entry: (label, needs the device online, handler). The handler
+# receives a device id, or None for the configuration entries. device_actions
+# numbers them in order, so the screen stays a single numbered list.
+
+def _action_wake(dev_id):
+    run_cmd(f"adb -s {dev_id} shell input keyevent KEYCODE_WAKEUP")
+    console.print("[green]✅ Screen woken[/green]")
+
+def _action_lock(dev_id):
+    run_cmd(f"adb -s {dev_id} shell input keyevent KEYCODE_SLEEP")
+    console.print("[green]✅ Screen locked[/green]")
+
+def _with_registered_app(run):
+    """Ask which registered app, then hand its key to `run`."""
+    if not APPS:
+        console.print("[yellow]No apps registered yet — add one from the dashboard first.[/yellow]")
+        return
+    run(Prompt.ask("App", choices=list(APPS.keys())))
+
+def _edit_device_prompt(key):
+    info = DEVICES[key]
+    new_ip = Prompt.ask("IP", default=info.get("ip", ""))
+    new_port = Prompt.ask("Port", default=str(info.get("port", "")))
+    new_model = Prompt.ask("Model", default=info.get("model", ""))
+    DEVICES[key] = {**info, "ip": new_ip, "port": new_port, "model": new_model}
+    save_config()
+    console.print(f"[green]✅ {key} updated[/green]")
+
+def _toggle_device_flag(key):
+    info = DEVICES[key]
+    info["disabled"] = not info.get("disabled", False)
+    save_config()
+    console.print(f"[green]✅ {key} {'disabled' if info['disabled'] else 'enabled'}[/green]")
+
+def _remove_device(key):
+    if not Confirm.ask(f"[red]Remove '{key}' from fenox?[/red]"):
+        return False
+    del DEVICES[key]
+    save_config()
+    console.print(f"[green]✅ {key} removed[/green]")
+    return True
+
+def _refresh_device_status(key):
+    dev_id = check_and_connect(key, interactive=False)
+    if dev_id:
+        console.print(f"[green]✅ Reachable as {dev_id}[/green]")
+    else:
+        console.print("[yellow]○ Not reachable right now — check the IP, port or cable.[/yellow]")
+
+def _device_action_sections(key):
+    """The per-device toolset: (section, column, [(label, needs device, handler)]).
+
+    Column 2 holds the sections that sit beside the first three on a wide terminal.
+    """
+    return [
+        ("PHONE", 1, [
+            ("📨 Read messages", True, lambda d: action_messages(d)),
+            ("📞 Read the call log", True, lambda d: action_calls(d)),
+            ("👤 Read contacts", True, lambda d: action_contacts(d)),
+            ("📅 Read the calendar", True, lambda d: action_calendar(d)),
+        ]),
+        ("SCREEN & INPUT", 1, [
+            ("Mirror Screen & Control", True, lambda d: action_mirror(key)),
+            ("Screenshot", True, lambda d: action_media(key, "screenshot")),
+            ("Record the screen", True, lambda d: action_media(key, "record")),
+            ("Wake the screen", True, _action_wake),
+            ("Lock the screen", True, _action_lock),
+            ("Type text", True, _action_type_text),
+            ("Tap at XY", True, _action_tap_screen),
+            ("Swipe gesture", True, _action_swipe),
+            ("Key combos", True, _action_key_combo),
+            ("Copy text from PC to device", True, _action_clipboard_copy),
+            ("Read the device clipboard", True, _action_clipboard_read),
+            ("Open a URL on the device", True, _action_open_url),
+            ("Open the last capture", True, lambda d: _open_last_capture(key)),
+        ]),
+        ("APPS", 1, [
+            ("Open an app on this device", True,
+             lambda d: _with_registered_app(lambda ak: action_open(ak, key))),
+            ("List installed apps", True, _action_list_apps),
+            ("Uninstall an app", True, _action_uninstall_app),
+            ("Clear an app's data", True, _action_clear_app_data),
+            ("Force stop an app", True, _action_force_stop),
+            ("App info", True, _action_app_info),
+            ("Install an APK from the PC", True, _action_install_apk_from_pc),
+            ("Nuke and relaunch an app", True,
+             lambda d: _with_registered_app(lambda ak: action_nuke(ak, key))),
+        ]),
+        ("FILES", 1, [
+            ("Push a file to the device", True, _action_push_file),
+            ("Pull a file from the device", True, _action_pull_file),
+            ("Browse device storage", True, _action_browse_storage),
+        ]),
+        ("DEVICE CONTROL", 2, [
+            ("Reboot options", True, _action_reboot_menu),
+            ("Toggle Wi-Fi", True, _action_toggle_wifi),
+            ("Toggle mobile data", True, _action_toggle_data),
+            ("Toggle Bluetooth", True, _action_toggle_bluetooth),
+            ("Volume", True, _action_volume_control),
+            ("Brightness", True, _action_brightness_control),
+            ("Interactive shell", True, _action_interactive_shell),
+        ]),
+        ("DEV TOOLS", 2, [
+            ("Device info", True, _action_device_info_dashboard),
+            ("Battery", True, _action_battery_info),
+            ("Network", True, _action_network_info),
+            ("Storage", True, _action_storage_info),
+            ("Running processes", True, _action_running_processes),
+            ("Send a notification", True, _action_send_notification),
+            ("Read notifications", True, _action_read_notifications),
+            ("Bind app ports", True,
+             lambda d: _with_registered_app(lambda ak: action_bind(ak, key))),
+            ("Follow app logs", True,
+             lambda d: _with_registered_app(lambda ak: action_logs(ak, key))),
+            ("Live health monitor", True, _action_health_monitor),
+        ]),
+        ("CONFIGURE DEVICE", 2, [
+            ("Edit name / address / model", False, lambda d: _edit_device_prompt(key)),
+            ("Enable or disable", False, lambda d: _toggle_device_flag(key)),
+            ("Check if it is reachable now", False, lambda d: _refresh_device_status(key)),
+            ("Remove this device", False, lambda d: _remove_device(key)),
+        ]),
+    ]
+
 def app_actions(key):
+    data = APPS[key]
+    pkg = data.get("package") or resolve_package(key) or "?"
+    options = [
+        ("1", "Run local (pick device)"), ("2", "Run remote (pick device)"),
+        ("3", "Run on ALL online devices"), ("4", "Open app on a device"),
+        ("5", "Build release APK"), ("6", "flutter clean + pub get"),
+        ("7", "Start backend"),
+    ]
+    subtitle = f"{_pretty_path(os.path.expanduser(str(data.get('path', ''))))} · port {data.get('port', '')} · {pkg}"
     while True:
-        console.clear()
-        console.print(Panel(f"[bold bright_white]📦  {key.upper()}[/bold bright_white]", box=box.HEAVY, border_style="bright_green", padding=(0, 1)))
-        data = APPS[key]
-        pkg = data.get("package") or resolve_package(key) or "?"
-        console.print(f"  [dim]{data.get('path', '')}  │  port {data.get('port', '')}  │  {pkg}[/dim]")
-        console.print()
-        console.print(
-            "  [bold bright_green]1[/bold bright_green] 🚀 [dim]Run local (pick device)[/dim]"
-        )
-        console.print(
-            "  [bold bright_green]2[/bold bright_green] 🚀 [dim]Run remote (pick device)[/dim]"
-        )
-        console.print(
-            "  [bold bright_green]3[/bold bright_green] 🚀 [dim]Run on ALL online devices[/dim]"
-        )
-        console.print(
-            "  [bold bright_green]4[/bold bright_green] 🚀 [dim]Open app on a device[/dim]"
-        )
-        console.print(
-            "  [bold bright_green]5[/bold bright_green] 📦 [dim]Build release APK[/dim]"
-        )
-        console.print(
-            "  [bold bright_green]6[/bold bright_green] 🧹 [dim]flutter clean + pub get[/dim]"
-        )
-        console.print(
-            "  [bold bright_green]7[/bold bright_green] 🖥  [dim]Start backend[/dim]"
-        )
-        console.print()
-        console.print("  [bold bright_red]b[/bold bright_red] ⬅  [dim]Back to dashboard[/dim]")
-        choice = _ask_key("action")
-        if choice == "b": return
+        choice = run_menu(f"📦  {key.upper()}", options,
+                          breadcrumb="dashboard › app",
+                          subtitle=subtitle, accent="bright_green")
+        if choice is None: return
         if choice in ("1", "2"):
             dev_key = Prompt.ask("Device", choices=list(DEVICES.keys()) + ["all"], default=list(DEVICES.keys())[0] if DEVICES else "all")
             action_run(key, dev_key, is_remote=(choice == "2"))
@@ -3500,7 +5057,7 @@ def _print_app_summary(name, entry, updated=False):
     console.print(f"   api_local: {entry.get('api_local', '—')}")
     console.print(f"   api_remote:{entry.get('api_remote', '—')}")
     console.print(f"   backend:   {entry.get('backend', {}).get('cmd', '—')}  ({entry.get('backend', {}).get('path', '')})")
-    console.print(f"[dim]Aliases are live now — try `{name}-all`, `{name}-release`, or `fenox-mobile run {name} <device>`.[/dim]")
+    console.print(f"[dim]Aliases are live now — try `{name}-all`, `{name}-release`, or `fenox run {name} <device>`.[/dim]")
 
 def action_add_app(args=None):
     """Scriptable registration. With --name: zero prompts (or --yes). Without: guided wizard."""
@@ -3624,7 +5181,7 @@ def action_scan(args=None):
     if added:
         save_config()
         first = added[0][0]
-        console.print(f"\n[green]✅ Registered {len(added)} project(s). Aliases are live now — try `{first}-all` or `fenox-mobile run {first} <device>`.[/green]")
+        console.print(f"\n[green]✅ Registered {len(added)} project(s). Aliases are live now — try `{first}-all` or `fenox run {first} <device>`.[/green]")
 
 
 def action_backend(app_key):
@@ -3658,7 +5215,7 @@ def action_hot(app_key, full=False):
     session = f"fenox_{app_key}"
     has = run_cmd(f"tmux has-session -t {session} 2>/dev/null && echo yes")
     if not has:
-        console.print(f"[yellow]No running session '{session}'. Start it first with `fenox-mobile run {app_key} <device>` (or {app_key}-all).[/yellow]")
+        console.print(f"[yellow]No running session '{session}'. Start it first with `fenox run {app_key} <device>` (or {app_key}-all).[/yellow]")
         return
     key = "R" if full else "r"
     run_cmd(f"tmux send-keys -t {session} {key}")
@@ -3675,7 +5232,7 @@ def action_install(app_key):
         if matches:
             apk = str(matches[0])
     if not os.path.exists(apk):
-        console.print(f"[yellow]No release APK found for {app_key}. Build it first (`fenox-mobile build {app_key}`).[/yellow]")
+        console.print(f"[yellow]No release APK found for {app_key}. Build it first (`fenox build {app_key}`).[/yellow]")
         if Confirm.ask("[cyan]Build it now?[/cyan]", default=True):
             action_build(app_key)
         return
@@ -3726,12 +5283,255 @@ def _preflight(app_key, dev_key, is_remote):
         return False
     return True
 
+SESSION_START = time.time()
+
+# Whether the opening screen has been drawn, and whether the sign-off has been
+# printed, so the session bookends appear exactly once however we exit.
+_SESSION_OPENED = False
+_FAREWELL_SHOWN = False
+
+def _human_duration(seconds):
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m"
+
+def _plural(count, singular, plural=None):
+    """'1 device', '2 devices' — screens should not read like log lines."""
+    word = singular if count == 1 else (plural or singular + "s")
+    return f"{count} {word}"
+
+def _pretty_path(path):
+    """Show the home directory as ~ so the screens stay short and readable."""
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
+
+def _platform_label():
+    """Human name for the platform fenox is running on."""
+    if IS_WSL:
+        distro = os.environ.get("WSL_DISTRO_NAME", "")
+        return f"WSL {distro}".strip()
+    if IS_LINUX: return "Linux"
+    if IS_MACOS: return "macOS"
+    return sys.platform
+
+def _shell_integration():
+    """(rcfile, installed, total) for the alias + completion lines in the rc file."""
+    shell = os.path.basename(os.environ.get("SHELL", "bash"))
+    comp_shell = "zsh" if "zsh" in shell else "bash"
+    rcfile = "~/.zshrc" if comp_shell == "zsh" else "~/.bashrc"
+    lines = ('eval "$(fenox --generate-aliases)"',
+             f'eval "$(fenox --generate-completions {comp_shell})"')
+    try:
+        content = open(os.path.expanduser(rcfile), encoding="utf-8", errors="ignore").read()
+    except OSError:
+        content = ""
+    return rcfile, sum(1 for line in lines if line in content), len(lines)
+
+def _adb_probe():
+    """(ok, detail) for the adb server fenox will talk to. Read-only."""
+    try:
+        out = subprocess.run([ADB_EXE, "-P", str(ADB_SERVER_PORT), "devices"],
+                             capture_output=True, text=True, timeout=8, stdin=subprocess.DEVNULL)
+    except Exception as exc:
+        return False, f"unreachable ({type(exc).__name__})"
+    if out.returncode != 0 or "List of devices" not in out.stdout:
+        return False, "not responding"
+    found = [line for line in out.stdout.splitlines()[1:] if line.strip()]
+    return True, f"{len(found)} device(s) visible" if found else "no devices attached yet"
+
+def _boot_adb_server():
+    """Bring up the shared adb server, showing progress instead of freezing."""
+    if sys.stdin.isatty():
+        with console.status(f"[dim]connecting to adb on port {ADB_SERVER_PORT}…[/dim]", spinner="dots12"):
+            ensure_shared_adb_server()
+            return _adb_probe()
+    ensure_shared_adb_server()
+    return _adb_probe()
+
+def _session_checks(adb_ok, adb_detail):
+    """Opening-screen rows: (state, label, detail) with state in ok/warn/bad."""
+    checks = []
+    if os.path.exists(CONFIG_PATH):
+        checks.append(("ok", "config", _pretty_path(CONFIG_PATH)))
+    else:
+        checks.append(("warn", "config", "not created yet — defaults in use"))
+    checks.append(("ok" if adb_ok else "bad", "adb server",
+                   f"port {ADB_SERVER_PORT} · {adb_detail}"))
+    projects = get_projects_dir()
+    if os.path.isdir(projects):
+        checks.append(("ok", "projects", _pretty_path(projects)))
+    else:
+        checks.append(("warn", "projects", f"{_pretty_path(projects)} not found — run fenox init"))
+    rcfile, have, want = _shell_integration()
+    if have == want:
+        checks.append(("ok", "shell", f"aliases + completions in {rcfile}"))
+    elif have:
+        checks.append(("warn", "shell", f"{have}/{want} lines in {rcfile} — run fenox init"))
+    else:
+        checks.append(("warn", "shell", f"not hooked into {rcfile} — run fenox init"))
+    return checks
+
+def _boot_tip():
+    """One tip per day, chosen from the ones that actually apply to this machine.
+
+    Rotating daily keeps the opening screen from being the same sentence forever,
+    and every tip is only offered when it is relevant — no telling someone with
+    four devices to press `f` to find their first one. The generic key-map tip is
+    a fallback, so a useful suggestion is never crowded out by it.
+    """
+    tips = []
+    if not DEVICES:
+        tips.append("press [bold]f[/bold] to find phones already on your Wi-Fi, or [bold]d[/bold] for a full health check")
+    if DEVICES and not APPS:
+        tips.append("press [bold]a[/bold] to register a Flutter project, or [bold]n[/bold] to scan your projects directory")
+    disabled = [k for k, info in DEVICES.items() if not is_device_enabled(info)]
+    if disabled:
+        tips.append(f"[bold]g[/bold] toggles a device — {_plural(len(disabled), 'device')} disabled and skipped by connect and bind")
+    if DEVICES and APPS:
+        tips.append("open a device with its number — Screen, Apps, Files, Control, Dev tools and Config are all in there")
+    if len(DEVICES) > 1:
+        tips.append("press [bold]r[/bold] to screenshot every device at once, or [bold]b[/bold] to re-bind every app port")
+    if not tips:                # nothing to suggest: fall back to the key map
+        return "[bold]b[/bold] goes back, [bold]Esc[/bold] leaves a menu, [bold]x[/bold] quits fenox"
+    # A day-based index keeps the choice stable for a whole session and changes
+    # with the calendar rather than at random.
+    return tips[datetime.date.today().timetuple().tm_yday % len(tips)]
+
+def _first_run_panel():
+    """Guidance shown while nothing is configured on this machine."""
+    return Panel(
+        "[bold bright_white]Welcome to Fenox[/bold bright_white]\n\n"
+        "[dim]Nothing is configured on this machine yet.[/dim]\n\n"
+        "   [bold bright_cyan]1[/bold bright_cyan]  Run [cyan]fenox init[/cyan] to choose your projects directory\n"
+        "   [bold bright_cyan]2[/bold bright_cyan]  Plug in a phone with USB debugging on, then press "
+        "[cyan]d[/cyan] (Doctor)\n"
+        "   [bold bright_cyan]3[/bold bright_cyan]  Or press [cyan]f[/cyan] to find devices already on your Wi-Fi\n\n"
+        "[dim]This notice disappears once you have a device or an app.[/dim]",
+        title="[bold bright_blue]👋 First run[/bold bright_blue]",
+        box=box.HEAVY, border_style="bright_blue", padding=(1, 3))
+
+def _session_start():
+    """Opening screen: brand banner, environment checks, then the adb warm-up.
+
+    Printed once per interactive session. Without a terminal it still reports the
+    same facts, just without the spinner or the key wait.
+    """
+    global _SESSION_OPENED
+    _SESSION_OPENED = True
+    console.print()
+    console.print(Rule(Text.from_markup(
+        f"  [bold bright_blue]⚡ fenox[/bold bright_blue] "
+        f"[dim]v{FENOX_VERSION} · {_platform_label()} · Python {sys.version.split()[0]}[/dim]"),
+        style="blue", align="left"))
+    console.print()
+    console.print(_banner())
+    console.print()
+    adb_ok, adb_detail = _boot_adb_server()
+    rows = Table.grid(padding=(0, 2))
+    rows.add_column(justify="center", width=2)
+    rows.add_column(style="bold bright_white", min_width=10)
+    rows.add_column(style="dim")
+    marks = {"ok": "[green]✓[/green]", "warn": "[yellow]○[/yellow]", "bad": "[red]✗[/red]"}
+    for state, label, detail in _session_checks(adb_ok, adb_detail):
+        rows.add_row(marks[state], label, detail)
+    console.print(Panel(rows, title="[bold bright_cyan]Session[/bold bright_cyan]",
+                        box=box.HEAVY, border_style="bright_cyan", padding=(1, 2)))
+    if not DEVICES and not APPS:
+        # Nothing to choose from yet: show the guidance and go straight into the
+        # dashboard. There is no "press a key to continue" pause here — the panel
+        # is the dashboard's empty state, and a pause would swallow the user's
+        # first choice (only Enter/Esc would have got them past it).
+        console.print()
+        console.print(_first_run_panel())
+        return
+    console.print()
+    console.print(Text.from_markup(f"  [dim]💡[/dim] [dim]{_boot_tip()}[/dim]"))
+    console.print(Text.from_markup(
+        "  [dim]Pick a device or app by number, or run a shortcut. "
+        "[bold bright_white]b[/bold bright_white]/[bold bright_white]Esc[/bold bright_white] go back, "
+        "[bold bright_white]x[/bold bright_white] quits.[/dim]"))
+    console.print()
+
+def _session_events():
+    """Deploys recorded during this session, newest first."""
+    try:
+        with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+            history = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    events = []
+    for entry in history.values():
+        try:
+            ts = datetime.datetime.fromisoformat(str(entry.get("ts", "")))
+        except ValueError:
+            continue
+        if ts.timestamp() >= SESSION_START:
+            events.append((ts, entry))
+    return sorted(events, key=lambda pair: pair[0], reverse=True)
+
+def _farewell(reason="quit"):
+    """Sign-off for the interactive session: what happened, and what to do next."""
+    headline = ("[bold bright_yellow]Session interrupted[/bold bright_yellow]"
+                if reason == "interrupt"
+                else "[bold bright_white]Session ended[/bold bright_white]")
+    note = {"quit": "",
+            "interrupt": "[dim]Ctrl+C — nothing was left running.[/dim]\n",
+            "eof": "[dim]Input ended.[/dim]\n"}.get(reason, "")
+
+    events = _session_events()
+    if events:
+        ts, entry = events[0]
+        outcome = "[green]ok[/green]" if entry.get("ok") else "[red]failed[/red]"
+        ago = _human_duration(time.time() - ts.timestamp())
+        activity = (f"[dim]{_plural(len(events), 'action')} this session · last:[/dim] "
+                    f"[bold bright_white]{entry.get('app', '?')}[/bold bright_white] "
+                    f"[dim]→ {entry.get('device', 'all')} "
+                    f"({entry.get('action', 'run')}, {outcome}, {ago} ago)[/dim]")
+    else:
+        activity = "[dim]No deploys this session.[/dim]"
+
+    disabled = sum(1 for info in DEVICES.values() if not is_device_enabled(info))
+    if not DEVICES and not APPS:
+        hint = "Nothing is configured yet — run [bold]fenox init[/bold] to get set up."
+    elif not DEVICES:
+        hint = "No devices saved yet — press [bold]d[/bold] (doctor) or run [bold]fenox discover[/bold]."
+    elif disabled:
+        hint = f"{disabled} device(s) disabled — re-enable them from the dashboard with [bold]g[/bold]."
+    else:
+        hint = "Run [bold]fenox doctor[/bold] for a health check, or re-bind ports with [bold]fenox connect[/bold]."
+
+    console.print()
+    console.print(Panel(
+        f"{headline}   [dim]{_human_duration(time.time() - SESSION_START)} · "
+        f"{_plural(len(DEVICES), 'device')} · {_plural(len(APPS), 'app')}[/dim]\n\n"
+        f"{note}{activity}\n\n"
+        f"[dim]Next:[/dim] {hint}\n"
+        "[dim]Come back any time with[/dim] [bold]fenox[/bold][dim] — your aliases live in the shell.[/dim]",
+        title="[bold bright_blue]⚡ Fenox[/bold bright_blue]",
+        box=box.HEAVY, border_style="bright_blue", padding=(1, 3)))
+    console.print()
+
+def _shutdown(reason="quit", code=0):
+    """Print the sign-off at most once, hand the cursor back, and exit."""
+    global _FAREWELL_SHOWN
+    console.show_cursor(True)
+    if not _FAREWELL_SHOWN:
+        _FAREWELL_SHOWN = True
+        _farewell(reason)
+    sys.exit(code)
+
 def interactive_menu():
-    """Live dashboard: keeps itself up to date while waiting for one keypress."""
+    """Live dashboard: refreshes itself while you decide what to do."""
     shortcuts = [
         ("d", "Doctor"), ("s", "Sync"), ("p", "Pair"), ("q", "Pair QR"),
         ("f", "Discover"), ("n", "Scan"), ("a", "Add app"),
-        ("+", "Edit device"), ("-", "Delete device"), ("g", "Toggle device"),
+        ("+", "Add device"), ("e", "Edit device"), ("-", "Delete device"),
+        ("g", "Toggle device"),
         ("m", "Rename device"), ("b", "Bind all ports"), ("r", "Batch screenshot"),
         ("c", "Edit config"),
     ]
@@ -3740,50 +5540,110 @@ def interactive_menu():
         "f": action_discover, "n": action_scan, "a": lambda: action_add_app(),
         "b": lambda: action_bind("all", "all"),
         "r": lambda: action_media("all", "screenshot"),
-        "+": action_edit_device, "-": action_delete_device,
+        "+": action_add_device, "e": action_edit_device, "-": action_delete_device,
         "g": action_toggle_device, "m": _rename_device_prompt,
         "c": _open_config_in_editor,
     }
     # The dashboard is re-rendered on every refresh, so the index maps are
     # captured here rather than passed around.
     indices = {}
+    state = {"cursor": 0}
 
     def body():
-        renderable, dev_index, app_index = _build_dashboard()
+        # One batch telemetry read warms the cache, so the rows built below are
+        # cheap even though the screen refreshes itself on a timer.
+        get_device_telemetry_parallel(sorted(get_connected_device_ids()))
+        if DEVICES and APPS:
+            return None
+        # Nothing set up yet: one card that says what to do, instead of empty
+        # sections the user has to interpret.
+        hints = []
+        if not DEVICES:
+            hints.append(Text.from_markup(
+                "  [bold bright_white]Plug in a phone[/bold bright_white] then run "
+                "[bold cyan]Doctor[/bold cyan] — it finds USB devices and asks for a name."))
+        else:
+            hints.append(Text.from_markup(
+                f"  [bold bright_white]{_plural(len(DEVICES), 'device')}[/bold bright_white] "
+                "registered — press [bold cyan]p[/bold cyan] to pair another over Wi-Fi."))
+        if not APPS:
+            hints.append(Text.from_markup(
+                "  [bold bright_white]Point fenox at your projects[/bold bright_white] with "
+                "[bold cyan]Scan[/bold cyan] for a whole directory, or "
+                "[bold cyan]Add app[/bold cyan] for one."))
+        return Panel(Group(*hints), box=box.ROUNDED, border_style="yellow",
+                     title=Text("GETTING STARTED", style="yellow"), title_align="left",
+                     padding=(0, 1))
+
+    def counters():
+        """Right-hand side of the header bar: how much is set up."""
+        return (f"[bold bright_white]{_plural(len(DEVICES), 'device')}[/bold bright_white]"
+                f"   [dim]│[/dim]   "
+                f"[bold bright_white]{_plural(len(APPS), 'app')}[/bold bright_white]")
+
+    def reach():
+        """Footer status: what is reachable right now, refreshed with the screen."""
+        online, total = len(get_connected_device_ids()), len(DEVICES)
+        if not total:
+            state = "[yellow]●[/yellow] [dim]no devices registered[/dim]"
+        elif online == total:
+            state = f"[green]●[/green] [dim]{online} online[/dim]"
+        elif online:
+            state = (f"[yellow]●[/yellow] [dim]{online} online · {total - online} offline[/dim]")
+        else:
+            state = f"[red]●[/red] [dim]all {total} offline[/dim]"
+        return f"{state}   [dim]│[/dim]   [dim]adb :{ADB_SERVER_PORT}[/dim]"
+
+    def rows():
+        """Devices, then apps, then maintenance — sections of one screen."""
+        connected = set(get_connected_device_ids())
+        items, dev_index, app_index = [], {}, {}
+        if DEVICES:
+            items.append((None, "DEVICES"))
+        for number, (name, info) in enumerate(DEVICES.items(), start=1):
+            dev_index[str(number)] = name
+            items.append((str(number), *_device_row(name, info, connected)))
+        if APPS:
+            items.append((None, "APPS"))
+        for number, (name, data) in enumerate(APPS.items(), start=len(DEVICES) + 1):
+            app_index[str(number)] = name
+            items.append((str(number), *_app_row(name, data)))
+        items.append((None, "ACTIONS", "", 2))
+        items.extend((key, label, "", 2) for key, label in shortcuts)
         indices["dev"], indices["app"] = dev_index, app_index
-        return Group(_banner(), renderable)
+        return items
 
     while True:
         choice = run_menu(
-            options=shortcuts,
+            options=rows,
             body=body,
-            breadcrumb=f"fenox v{FENOX_VERSION} · live dashboard",
-            subtitle="press a device # or app # to open it, or use a shortcut below",
-            footer=("  [bold bright_red]x[/bold bright_red] [dim]quit[/dim]"
-                    "    [dim]· single keypress, no Enter[/dim]"),
+            subtitle=lambda: f"{_platform_label()} · live dashboard · refreshes every 5s",
+            breadcrumb=counters,
+            status=reach,
+            footer=("[dim]↑/↓ or a number   [bold bright_white]Enter[/bold bright_white] open   "
+                    "[bold bright_white]x[/bold bright_white] quit[/dim]"),
             interval=5.0,
             accent="bright_cyan",
             back_keys=("x", "esc"),
+            state=state,
+            two_col=True,
         )
         if choice is None:
             return
-        if choice == "":
+        if choice in indices.get("dev", {}):
+            device_actions(indices["dev"][choice])
             continue
-        if choice.isdigit():
-            number = int(choice)
-            if number in indices.get("dev", {}):
-                device_actions(indices["dev"][number])
-            elif number in indices.get("app", {}):
-                app_actions(indices["app"][number])
+        if choice in indices.get("app", {}):
+            app_actions(indices["app"][choice])
             continue
         handler = handlers.get(choice)
         if handler:
             handler()
-            _wait_any_key("press any key to return to the dashboard")
+            _wait_any_key("press Enter to return to the dashboard")
 
 # --- Main Entry Point ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog="fenox-mobile")
+    parser = argparse.ArgumentParser(prog="fenox")
     subparsers = parser.add_subparsers(dest="command")
     
     parser_run = subparsers.add_parser("run")
@@ -3869,31 +5729,69 @@ if __name__ == "__main__":
     parser_groups.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove"])
     parser_groups.add_argument("name", nargs="?")
     parser_groups.add_argument("members", nargs="*")
-    parser.add_argument("--version", action="version", version=f"fenox-mobile {FENOX_VERSION}")
+    parser_phone = subparsers.add_parser("phone", help="Read your phone's own data: messages, calls, contacts, calendar")
+    parser_phone.add_argument("resource", nargs="?", default="messages", choices=list(PHONE_RESOURCES))
+    parser_phone.add_argument("--device", help="Device alias or adb id (default: the only connected one)")
+    parser_phone.add_argument("--thread", help="Show one conversation, by the Thread id listed")
+    parser_phone.add_argument("--search", help="Messages whose body, or calls whose number or name, contains this text")
+    parser_phone.add_argument("--unread", action="store_true", help="Only threads with unread messages")
+    parser_phone.add_argument("--limit", type=int, default=25, help="Rows to show (default 25)")
+    parser_phone.add_argument("--mark-read", action="store_true", help="Mark the shown thread read, or the shown calls as seen, on the phone")
+    parser_phone.add_argument("--export", metavar="FILE", help="Write the result to a local file")
+    parser_phone.add_argument("--redact", action="store_true", help="Hide numbers and message bodies")
+    parser_phone.add_argument("--missed", action="store_true", help="Calls: only the ones that were missed")
+    parser_phone.add_argument("--incoming", action="store_true", help="Calls: only the ones that came in")
+    parser_phone.add_argument("--outgoing", action="store_true", help="Calls: only the ones you dialled")
+    parser_phone.add_argument("--from", dest="from_number", metavar="NUMBER", help="Calls: the history with this number or contact name")
+    parser_phone.add_argument("--days", type=int, default=30, help="Calls: how far back to look; 0 is the whole log (default 30)")
+    parser_phone.add_argument("--dial", action="store_true", help="Calls: place the call to --from now, after confirming")
+    parser_phone.add_argument("--at", metavar="TIME", help="Calendar --add: `HH:MM` (today/tomorrow) or `YYYY-MM-DD HH:MM`")
+    parser_phone.add_argument("--add", metavar="TITLE", help="Calendar: add an event with this title (needs --at)")
+    parser_phone.add_argument("--duration", type=int, default=60, help="Calendar --add: length in minutes (default 60)")
+    parser_phone.add_argument("--json", dest="json_out", action="store_true", help="Machine-readable output")
+    parser.add_argument("--version", action="version", version=f"fenox {FENOX_VERSION}")
     parser.add_argument("--generate-completions", metavar="SHELL", choices=["bash", "zsh"], help=argparse.SUPPRESS)
 
 # --- Clean exits: no tracebacks on Ctrl+C or piped/EOF input -----------------
+def _interrupted():
+    """Ctrl+C: close a session with its sign-off, or just say so and exit 130."""
+    console.show_cursor(True)
+    if _SESSION_OPENED:
+        _shutdown("interrupt", 130)
+    console.print("\n[bold cyan]👋 Interrupted — nothing was left running.[/bold cyan]")
+    sys.exit(130)
+
 def _main():
     try:
-        ensure_shared_adb_server()
-        if (len(sys.argv) > 1 and sys.argv[1] not in ("--version", "-h", "--help", "--generate-completions")
-                and sys.argv[1] not in KNOWN_COMMANDS):
-            action_plugin(sys.argv[1], sys.argv[2:])
-            return
+        # Sourcing a shell must stay instant and side-effect free: no adb server,
+        # no config writes, nothing a new terminal has to wait for.
         if "--generate-completions" in sys.argv:
             idx = sys.argv.index("--generate-completions")
             shell = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else "bash"
             generate_completions(shell)
             return
-        if len(sys.argv) == 1:
-            interactive_menu()
-        else:
-            args = parser.parse_args()
-            _dispatch(args)
+        # `fenox <plugin>` — anything that is neither a built-in nor a flag.
+        if (len(sys.argv) > 1 and not sys.argv[1].startswith("-")
+                and sys.argv[1] not in KNOWN_COMMANDS):
+            ensure_shared_adb_server()
+            action_plugin(sys.argv[1], sys.argv[2:])
+            return
+        args = parser.parse_args()   # --version / --help exit here, without adb
+        if args.command is None:
+            _session_start()
+            try:
+                interactive_menu()
+            finally:
+                # The live view hides the cursor; always hand it back, even on Ctrl+C.
+                console.show_cursor(True)
+            _shutdown("quit", 0)
+        ensure_shared_adb_server()
+        _dispatch(args)
     except KeyboardInterrupt:
-        console.print("\n[cyan]👋 Interrupted.[/cyan]")
-        sys.exit(130)
+        _interrupted()
     except EOFError:
+        if _SESSION_OPENED:
+            _shutdown("eof", 0)
         console.print("\n[dim]Input ended — exiting.[/dim]")
         sys.exit(0)
 
@@ -3926,6 +5824,7 @@ def _dispatch(args):
     elif args.command == "logs": action_logs(args.app, args.device)
     elif args.command == "nuke": action_nuke(args.app, args.device)
     elif args.command == "run": action_run(args.app, args.device, args.remote)
+    elif args.command == "phone": action_phone(args)
 
 # --- Run ----------------------------------------------------------------------
 if __name__ == "__main__":

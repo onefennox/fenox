@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Fenox Mobile installer
+# Fenox installer
 #
 # One-liner (no repo needed):
-#   curl -fsSL https://raw.githubusercontent.com/onefennox/fenox-mobile/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/install.sh | bash
 #
 # From a clone:
-#   git clone https://github.com/onefennox/fenox-mobile.git && cd fenox-mobile && bash install.sh
+#   git clone https://github.com/onefennox/fenox.git && cd fenox && bash install.sh
 #
 # Fast path  : download a prebuilt, checksum-verified binary from GitHub Releases
 # Fallback   : build from this repo's source with PyInstaller
@@ -13,9 +13,9 @@
 # Supported: Linux (x86_64, aarch64) and WSL. macOS and Windows are not.
 set -euo pipefail
 
-REPO="onefennox/fenox-mobile"
+REPO="onefennox/fenox"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || pwd)"
-SRC="$REPO_DIR/src/fenox_mobile_source.py"
+SRC="$REPO_DIR/src/fenox.py"
 BIN_DIR="$HOME/.local/bin"
 
 # --- platform guard -----------------------------------------------------------
@@ -30,7 +30,7 @@ case "$(uname -s)" in
     exit 1 ;;
   *)
     echo "❌ Unsupported OS: $(uname -s) — fenox supports Linux and WSL."
-    echo "   (A native Windows client is planned as a separate GUI app.)"
+    echo "   On Windows, install and run fenox inside WSL."
     exit 1 ;;
 esac
 
@@ -87,20 +87,19 @@ get_expected_sum() { # get_expected_sum <tag> <asset> -> sha256 digest on stdout
 install_binary() { # install_binary <file>
   local f="$1"
   chmod +x "$f"
-  for dest in "$BIN_DIR/fenox-mobile" /usr/local/bin/fenox-mobile; do
+  for dest in "$BIN_DIR/fenox" /usr/local/bin/fenox; do
     if [ -f "$dest" ] && [ ! -L "$dest" ]; then
       cp "$dest" "$dest.bak-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
       break
     fi
   done
-  mv "$f" "$BIN_DIR/fenox-mobile"
-  ln -sf "$BIN_DIR/fenox-mobile" "$BIN_DIR/fenox"
+  mv "$f" "$BIN_DIR/fenox"
 }
 
 finish() { # finish <version>
-  "$BIN_DIR/fenox-mobile" --generate-aliases >/dev/null 2>&1 || true
+  "$BIN_DIR/fenox" --generate-aliases >/dev/null 2>&1 || true
   echo ""
-  echo "✅ fenox-mobile v$1 installed → $BIN_DIR/fenox-mobile (alias: fenox)"
+  echo "✅ fenox v$1 installed → $BIN_DIR/fenox"
   echo "   Run 'fenox init' for first-run setup. Try: fenox connect | fenox devices"
 }
 
@@ -112,17 +111,17 @@ fi
 # --- Mode A: piped/remote (no repo on disk) — download release binary ---------
 if [ ! -f "$SRC" ]; then
   TAG="$(get_latest_tag)"
-  [ -n "$TAG" ] || { echo "❌ Could not determine the latest release. Install from a clone instead:"; echo "   git clone https://github.com/$REPO.git && cd fenox-mobile && bash install.sh"; exit 1; }
+  [ -n "$TAG" ] || { echo "❌ Could not determine the latest release. Install from a clone instead:"; echo "   git clone https://github.com/$REPO.git && cd fenox && bash install.sh"; exit 1; }
   VER="${TAG#v}"
   BASE="https://github.com/$REPO/releases/download/$TAG"
-  ASSET="fenox-mobile-linux-$ARCH"
+  ASSET="fenox-linux-$ARCH"
   TMP="$(mktemp -d)"
   echo "📥 Downloading prebuilt $ASSET $TAG ..."
-  fetch "$BASE/$ASSET" "$TMP/fenox-mobile" || { echo "❌ Download failed. Build from source instead: git clone https://github.com/$REPO.git"; rm -rf "$TMP"; exit 1; }
+  fetch "$BASE/$ASSET" "$TMP/fenox" || { echo "❌ Download failed. Build from source instead: git clone https://github.com/$REPO.git"; rm -rf "$TMP"; exit 1; }
   EXPECTED="$(get_expected_sum "$TAG" "$ASSET")" || { echo "❌ No checksum file — refusing to install."; rm -rf "$TMP"; exit 1; }
-  actual="$(sha256_of "$TMP/fenox-mobile")" || { rm -rf "$TMP"; exit 1; }
+  actual="$(sha256_of "$TMP/fenox")" || { rm -rf "$TMP"; exit 1; }
   [ "$EXPECTED" = "$actual" ] || { echo "❌ Checksum mismatch — refusing to install."; rm -rf "$TMP"; exit 1; }
-  install_binary "$TMP/fenox-mobile"
+  install_binary "$TMP/fenox"
   rm -rf "$TMP"
   finish "$VER"
   exit 0
@@ -134,14 +133,14 @@ FENOX_VERSION="$(cat "$REPO_DIR/VERSION" 2>/dev/null || echo dev)"
 # Fast path: prebuilt release binary
 if [ "${FENOX_BUILD_FROM_SOURCE:-0}" != "1" ] && [ "$FENOX_VERSION" != "dev" ]; then
   BASE="https://github.com/$REPO/releases/download/v$FENOX_VERSION"
-  ASSET="fenox-mobile-linux-$ARCH"
+  ASSET="fenox-linux-$ARCH"
   TMP="$(mktemp -d)"
   echo "📥 Downloading prebuilt $ASSET v$FENOX_VERSION ..."
-  if fetch "$BASE/$ASSET" "$TMP/fenox-mobile"; then
+  if fetch "$BASE/$ASSET" "$TMP/fenox"; then
     EXPECTED="$(get_expected_sum "v$FENOX_VERSION" "$ASSET")" || EXPECTED=""
-    actual="$(sha256_of "$TMP/fenox-mobile")" || actual=""
+    actual="$(sha256_of "$TMP/fenox")" || actual=""
     if [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$actual" ]; then
-      install_binary "$TMP/fenox-mobile"
+      install_binary "$TMP/fenox"
       rm -rf "$TMP"
       finish "$FENOX_VERSION"
       exit 0
@@ -171,11 +170,11 @@ echo "✅ Source compiles ($(wc -l < "$SRC") lines, v$FENOX_VERSION)"
 
 echo "🏗  Building binary with PyInstaller (1-2 min)..."
 OUT_DIR="$REPO_DIR/dist"
-rm -rf "$OUT_DIR" "$REPO_DIR/build" "$REPO_DIR"/fenox-mobile.spec
-(cd "$REPO_DIR" && "$BUILD_ENV/bin/pyinstaller" --onefile --name fenox-mobile \
+rm -rf "$OUT_DIR" "$REPO_DIR/build" "$REPO_DIR"/fenox.spec
+(cd "$REPO_DIR" && "$BUILD_ENV/bin/pyinstaller" --onefile --name fenox \
   --distpath "$OUT_DIR" --workpath "$REPO_DIR/build" --specpath "$REPO_DIR" \
   --hidden-import rich "$SRC" >/dev/null)
 
-[ -f "$OUT_DIR/fenox-mobile" ] || { echo "❌ Build failed"; exit 1; }
-install_binary "$OUT_DIR/fenox-mobile"
+[ -f "$OUT_DIR/fenox" ] || { echo "❌ Build failed"; exit 1; }
+install_binary "$OUT_DIR/fenox"
 finish "$FENOX_VERSION"

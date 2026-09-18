@@ -9,8 +9,8 @@ Paste the commands you ran and their outcome. "Ran tests/test_release_e2e.sh
 against a locally built binary" beats a summary of the diff.
 -->
 
-- [ ] `python -m py_compile src/fenox_mobile_source.py`
-- [ ] `python src/fenox_mobile_source.py --help`
+- [ ] `python -m py_compile src/fenox.py`
+- [ ] `python src/fenox.py --help`
 - [ ] `bash -n install.sh`
 - [ ] `bash tests/test_install_checksum.sh`
 - [ ] `python tests/test_version_key.py`
