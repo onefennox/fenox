@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install rich
+
+      - name: Compile check
+        run: python -m py_compile src/fenox_mobile_source.py
+
+      - name: CLI smoke tests (no device required)
+        run: |
+          python src/fenox_mobile_source.py --help
+          python src/fenox_mobile_source.py --version
+          python src/fenox_mobile_source.py devices --json < /dev/null | python -c "import json,sys; d=json.load(sys.stdin); assert 'devices' in d"
+          python src/fenox_mobile_source.py groups < /dev/null
+          python src/fenox_mobile_source.py profile list < /dev/null
+
+      - name: Installer checks (syntax + checksum resolution)
+        run: |
+          bash -n install.sh
+          bash tests/test_install_checksum.sh
+
+      - name: Version comparison check
+        run: python tests/test_version_key.py
+
+      - name: Version consistency check
+        run: |
+          SRC_VER=$(grep -oP 'FENOX_VERSION = "\K[^"]+' src/fenox_mobile_source.py)
+          FILE_VER=$(cat VERSION)
+          [ "$SRC_VER" = "$FILE_VER" ] || { echo "❌ VERSION ($FILE_VER) != source ($SRC_VER)"; exit 1; }
+          echo "✅ v$SRC_VER"
