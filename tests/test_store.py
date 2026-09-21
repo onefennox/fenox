@@ -39,13 +39,16 @@ def test_devices_projects_and_groups_round_trip(tmp_path):
 def test_legacy_config_is_imported_once(tmp_path):
     legacy = Path.home() / ".fenox.json"
     legacy.write_text(json.dumps({
-        "apps": {"demo": {"path": "/srv/demo", "port": "4000"}},
+        "apps": {"demo": {"path": "/srv/demo", "port": "4000", "ws_local": "ws://localhost:4000"}},
         "devices": {"phone": {"ip": "192.168.1.5", "port": "5555"}},
         "settings": {"remote_domain": "legacy.test"},
     }))
 
     store = Store(tmp_path).load()
     assert store.projects()["demo"]["path"] == "/srv/demo"
+    # The legacy websocket field is renamed to the current schema.
+    assert store.projects()["demo"]["socket_local"] == "ws://localhost:4000"
+    assert "ws_local" not in store.projects()["demo"]
     assert store.devices()["phone"]["ip"] == "192.168.1.5"
     # The legacy schema left `type` implicit; wireless is inferred from the IP.
     assert store.devices()["phone"]["type"] == "wireless"

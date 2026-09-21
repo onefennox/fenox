@@ -43,6 +43,15 @@ def _normalize_device(device_id: str, entry: dict) -> dict:
     return data
 
 
+def _normalize_project(entry: dict) -> dict:
+    """Rename the legacy websocket URL fields to the current schema."""
+    data = dict(entry)
+    for old, new in (("ws_local", "socket_local"), ("ws_remote", "socket_remote")):
+        if old in data:
+            data.setdefault(new, data.pop(old))
+    return data
+
+
 def _default_data_dir() -> Path:
     override = os.environ.get("FENOX_DATA_DIR")
     if override:
@@ -270,7 +279,7 @@ class Store:
                 self.settings[key] = value
         # `apps` in the old schema are `projects` now.
         for project_id, entry in (data.get("apps") or {}).items():
-            self.upsert_project(project_id, entry)
+            self.upsert_project(project_id, _normalize_project(entry))
         return True
 
 
