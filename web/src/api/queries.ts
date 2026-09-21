@@ -160,9 +160,14 @@ export const removeFile = (id: string, path: string) =>
 // -- mirroring -------------------------------------------------------------
 
 export const mirrorStatus = (id: string) =>
-  api.get<{ available: boolean; reason: string; version: string | null; active: boolean }>(
-    `${devicePath(id)}/mirror/status`,
-  );
+  api.get<{
+    available: boolean;
+    reason: string;
+    server_version: string;
+    provisioned: boolean;
+    system_scrcpy: string | null;
+    active: boolean;
+  }>(`${devicePath(id)}/mirror/status`);
 
 // -- settings and system ---------------------------------------------------
 
