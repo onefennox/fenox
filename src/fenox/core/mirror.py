@@ -1,15 +1,22 @@
-"""Screen mirroring through the scrcpy server.
+"""Screen mirroring through an official scrcpy-server.
 
-The hub runs the scrcpy server that ships with the installed `scrcpy`, pushes it
-to the device, starts it, and proxies the raw video socket over a WebSocket. The
-hub never decodes video — the browser does, with WebCodecs. Input is not sent
-over the scrcpy control channel; it goes through the toolbox input actions, which
-keeps one code path for device input.
+Fenox provisions and pins its own scrcpy-server (see `scrcpy_server`) so
+mirroring does not depend on whatever the host's `scrcpy` package happens to
+ship. The hub pushes that server, opens scrcpy's default reverse tunnel, and
+proxies the raw video socket to the browser, which parses and decodes it with
+the Tango scrcpy client.
 
-The wire format implemented here is the scrcpy 1.x protocol: a 64-byte device
-name, then a 12-byte codec header, then frame headers of an 8-byte timestamp and
-a 4-byte size followed by the H.264 payload. `send_frame_meta` is requested from
-the server, so frames are length-delimited.
+Tunnel facts, from the server's own behavior (v3.3.3):
+
+* With `scid=-1` the abstract socket is named `scrcpy`.
+* With `tunnel_forward=false` (the default) the server *connects out* to that
+  socket, for video, then audio, then control. The hub listens locally and maps
+  the device socket to it with `adb reverse localabstract:scrcpy tcp:PORT`.
+* With `send_device_meta`/`send_codec_meta` the stream begins with a 64-byte
+  device name and a 12-byte codec header; the browser's client consumes them.
+
+Audio and the scrcpy control channel are disabled: input goes through the
+toolbox actions, so one code path drives the device with or without mirroring.
 """
 from __future__ import annotations
 
@@ -18,23 +25,25 @@ import shutil
 import socket
 import struct
 import subprocess
-import time
+from pathlib import Path
+
+from . import host, scrcpy_server
 
 SOCKET_NAME = "scrcpy"
+SERVER_REMOTE_PATH = "/data/local/tmp/scrcpy-server.jar"
 DEVICE_NAME_SIZE = 64
 CODEC_META_SIZE = 12
-FRAME_HEADER_SIZE = 12
-SERVER_REMOTE_PATH = "/data/local/tmp/scrcpy-server.jar"
 
 _VERSION_CACHE: str | None = None
 
+
+# --- locally installed scrcpy (used for discovery and as a fallback) --------
 
 def scrcpy_binary() -> str | None:
     return shutil.which("scrcpy")
 
 
 def scrcpy_version() -> str | None:
-    """The installed scrcpy version, or None when scrcpy is absent."""
     global _VERSION_CACHE
     if _VERSION_CACHE is not None:
         return _VERSION_CACHE or None
@@ -56,17 +65,8 @@ def scrcpy_version() -> str | None:
 
 
 def server_path() -> str | None:
-    """Locate the scrcpy-server jar.
-
-    Mirrors scrcpy's own lookup: `SCRCPY_SERVER_PATH` wins, then the share
-    directory under the install prefix, then a portable copy beside the binary,
-    plus the Snap location.
-    """
-    candidates: list[str] = []
-    override = os.environ.get("SCRCPY_SERVER_PATH")
-    if override:
-        candidates.append(override)
     binary = scrcpy_binary()
+    candidates: list[str] = []
     if binary:
         real = os.path.realpath(binary)
         prefix = os.path.dirname(os.path.dirname(real))
@@ -74,13 +74,9 @@ def server_path() -> str | None:
             os.path.join(prefix, "share", "scrcpy", "scrcpy-server"),
             os.path.join(os.path.dirname(real), "scrcpy-server"),
         ]
-        # Snap keeps the binary under /snap/<name>/... with the server in share.
-        if "/snap/" in real:
-            candidates.append(os.path.join(prefix, "share", "scrcpy", "scrcpy-server"))
     candidates += [
         "/usr/share/scrcpy/scrcpy-server",
         "/usr/local/share/scrcpy/scrcpy-server",
-        "/opt/scrcpy/scrcpy-server",
         "/snap/scrcpy/current/usr/local/share/scrcpy/scrcpy-server",
     ]
     for candidate in candidates:
@@ -89,127 +85,125 @@ def server_path() -> str | None:
     return None
 
 
-def available() -> tuple[bool, str]:
-    """Whether mirroring can run, with the reason when it cannot."""
-    if not scrcpy_binary():
-        return False, "scrcpy is not installed"
-    if scrcpy_version() is None:
-        return False, "the scrcpy version could not be read"
-    if not server_path():
-        return False, "the scrcpy-server jar was not found"
-    return True, ""
+# --- protocol helpers -------------------------------------------------------
 
+def server_args(version: str, *, audio: bool = False, control: bool = False) -> list[str]:
+    """Server options as the 2.x/3.x server accepts them.
 
-def server_argv(version: str, max_size: int = 0, bit_rate: int = 8_000_000, max_fps: int = 0) -> list[str]:
-    """The `adb shell` arguments that start the scrcpy server (1.x argument order).
-
-    Version, log level, max size, bit rate, max fps, lock orientation, tunnel
-    forward, crop, send frame meta, control. Tunnel forward is false so the server
-    listens on an abstract socket the hub reaches through `adb forward`; control
-    is false because input uses the toolbox actions instead.
+    The first argument must be the exact server version. `cleanup=false` keeps
+    the server from deleting its own jar, which would break the next start.
     """
     return [
-        "shell",
-        f"CLASSPATH={SERVER_REMOTE_PATH}",
-        "app_process", "/", "com.genymobile.scrcpy.Server",
-        version, "info",
-        str(max_size), str(bit_rate), str(max_fps),
-        "-1", "false", "-", "true", "false",
+        version,
+        f"audio={'true' if audio else 'false'}",
+        f"control={'true' if control else 'false'}",
+        "cleanup=false",
+        "log_level=info",
     ]
 
 
 def parse_codec_meta(data: bytes) -> dict:
-    """The 12-byte codec header as {codec, width, height}."""
     if len(data) < CODEC_META_SIZE:
         raise ValueError("short codec metadata")
     codec, width, height = struct.unpack(">4sII", data[:CODEC_META_SIZE])
     return {"codec": codec.decode("ascii", "replace"), "width": width, "height": height}
 
 
+def available(cache_dir: Path | str | None = None) -> tuple[bool, str]:
+    """Whether mirroring can run, with the reason when it cannot."""
+    if host.adb_client() is None:
+        return False, "adb was not found on this machine"
+    override = os.environ.get("FENOX_SCRCPY_SERVER")
+    if override and not os.path.isfile(override):
+        return False, f"FENOX_SCRCPY_SERVER points at a missing file: {override}"
+    return True, ""
+
+
+def _port_arg() -> int:
+    from . import adb
+    return adb.current_port() or adb.server_port()
+
+
+def _recv_exact(sock: socket.socket, size: int) -> bytes:
+    buffer = bytearray()
+    while len(buffer) < size:
+        chunk = sock.recv(size - len(buffer))
+        if not chunk:
+            raise ConnectionError("the scrcpy stream closed early")
+        buffer += chunk
+    return bytes(buffer)
+
+
 class MirrorSession:
     """One running scrcpy server and its video socket."""
 
-    def __init__(self, serial: str, max_size: int = 0, bit_rate: int = 8_000_000, max_fps: int = 0):
+    def __init__(self, serial: str, cache_dir: Path | str | None = None, version: str | None = None):
         self.serial = serial
-        self.max_size = max_size
-        self.bit_rate = bit_rate
-        self.max_fps = max_fps
-        self.device_name: str = ""
-        self.width = 0
-        self.height = 0
-        self.codec = ""
+        self.cache_dir = Path(cache_dir) if cache_dir else Path(os.environ.get("FENOX_DATA_DIR", "."))
+        self.version = version or scrcpy_server.PINNED_VERSION
         self._server: subprocess.Popen | None = None
+        self._listener: socket.socket | None = None
         self._sock: socket.socket | None = None
         self._port = 0
         self.started = False
 
-    def _forward_port(self) -> int:
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            return probe.getsockname()[1]
+    def _adb(self, args: list[str], timeout: int = 30) -> str:
+        client = host.adb_client()
+        if client is None:
+            return "adb was not found"
+        result = host.run([client, "-P", str(_port_arg()), "-s", self.serial, *args], timeout=timeout)
+        return result.stdout or result.stderr
 
     def start(self) -> None:
-        version = scrcpy_version()
-        if version is None:
-            raise RuntimeError("scrcpy is not installed")
-        jar = server_path()
-        if jar is None:
-            raise RuntimeError("the scrcpy-server jar was not found")
+        jar = scrcpy_server.ensure(self.cache_dir, self.version)
 
-        _adb(self.serial, ["push", jar, SERVER_REMOTE_PATH], timeout=120)
+        pushed = self._adb(["push", str(jar), SERVER_REMOTE_PATH], timeout=120)
+        if "1 file pushed" not in pushed:
+            raise RuntimeError(pushed.strip() or "could not push the scrcpy server to the device")
+
+        self._listener = socket.socket()
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen(1)
+        self._listener.settimeout(20)
+        self._port = self._listener.getsockname()[1]
+
+        self._adb(["reverse", f"localabstract:{SOCKET_NAME}", f"tcp:{self._port}"], timeout=30)
+
+        binary = host.adb_client()
+        if binary is None:
+            self.stop()
+            raise RuntimeError("adb was not found")
         self._server = subprocess.Popen(
-            ["adb", "-s", self.serial, *server_argv(version, self.max_size, self.bit_rate, self.max_fps)],
+            [binary, "-P", str(_port_arg()), "-s", self.serial, "shell",
+             f"CLASSPATH={SERVER_REMOTE_PATH}", "app_process", "/",
+             "com.genymobile.scrcpy.Server", *server_args(self.version)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
 
-        self._port = self._forward_port()
-        _adb(self.serial, ["forward", f"tcp:{self._port}", f"localabstract:{SOCKET_NAME}"], timeout=30)
-
-        deadline = time.time() + 15
-        last_error: Exception | None = None
-        while time.time() < deadline:
-            try:
-                self._sock = socket.create_connection(("127.0.0.1", self._port), timeout=5)
-                break
-            except OSError as exc:
-                last_error = exc
-                time.sleep(0.3)
-        if self._sock is None:
+        try:
+            self._sock, _ = self._listener.accept()
+        except OSError as exc:
             self.stop()
-            raise RuntimeError(f"could not connect to the scrcpy server: {last_error}")
-
-        name = _recv_exact(self._sock, DEVICE_NAME_SIZE)
-        meta_raw = _recv_exact(self._sock, CODEC_META_SIZE)
-        if name is None or meta_raw is None:
-            self.stop()
-            raise RuntimeError("the scrcpy server closed before sending its metadata")
-        self.device_name = name.split(b"\x00", 1)[0].decode("utf-8", "replace")
-        meta = parse_codec_meta(meta_raw)
-        self.codec = meta["codec"]
-        self.width = meta["width"]
-        self.height = meta["height"]
+            raise RuntimeError(f"the scrcpy server did not connect back: {exc}") from exc
+        finally:
+            if self._listener is not None:
+                self._listener.close()
+                self._listener = None
         self.started = True
 
-    def read_frame(self) -> bytes | None:
-        """The next `[12-byte header][payload]` frame, or None when the stream ends."""
-        if self._sock is None:
-            return None
-        header = _recv_exact(self._sock, FRAME_HEADER_SIZE, allow_eof=True)
-        if header is None:
-            return None
-        _pts, size = struct.unpack(">QI", header)
-        payload = _recv_exact(self._sock, size, allow_eof=True)
-        if payload is None:
-            return None
-        return header + payload
+    def read(self, size: int = 65536) -> bytes:
+        """Raw bytes from the video socket, or b"" when the stream ends.
 
-    def meta(self) -> dict:
-        return {
-            "device": self.device_name,
-            "codec": self.codec,
-            "width": self.width,
-            "height": self.height,
-        }
+        The device name and codec header are not stripped: the browser client
+        parses them itself.
+        """
+        if self._sock is None:
+            return b""
+        try:
+            return self._sock.recv(size)
+        except OSError:
+            return b""
 
     def stop(self) -> None:
         if self._sock is not None:
@@ -218,6 +212,12 @@ class MirrorSession:
             except OSError:
                 pass
             self._sock = None
+        if self._listener is not None:
+            try:
+                self._listener.close()
+            except OSError:
+                pass
+            self._listener = None
         if self._server is not None:
             try:
                 self._server.terminate()
@@ -229,28 +229,5 @@ class MirrorSession:
                     pass
             self._server = None
         if self._port:
-            _adb(self.serial, ["forward", "--remove", f"tcp:{self._port}"], timeout=10)
+            self._adb(["reverse", "--remove", f"localabstract:{SOCKET_NAME}"], timeout=10)
         self.started = False
-
-
-def _adb(serial: str, args: list[str], timeout: int = 30) -> str:
-    try:
-        proc = subprocess.run(
-            ["adb", "-s", serial, *args],
-            capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
-        )
-    except Exception as exc:
-        return f"{type(exc).__name__}: {exc}"
-    return (proc.stdout + proc.stderr).strip()
-
-
-def _recv_exact(sock: socket.socket, size: int, allow_eof: bool = False) -> bytes | None:
-    buffer = bytearray()
-    while len(buffer) < size:
-        chunk = sock.recv(size - len(buffer))
-        if not chunk:
-            if allow_eof and not buffer:
-                return None
-            raise ConnectionError("the scrcpy stream closed early")
-        buffer += chunk
-    return bytes(buffer)

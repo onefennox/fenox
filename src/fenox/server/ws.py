@@ -89,7 +89,7 @@ async def mirror(websocket: WebSocket, device_id: str) -> None:
         await websocket.close()
         return
 
-    session = MirrorSession(serial)
+    session = MirrorSession(serial, cache_dir=store.paths.data)
     try:
         await asyncio.to_thread(session.start)
     except Exception as exc:
@@ -98,13 +98,14 @@ async def mirror(websocket: WebSocket, device_id: str) -> None:
         return
 
     websocket.app.state.mirrors[device_id] = session
-    await websocket.send_json({"type": "meta", **session.meta()})
     try:
+        # The raw video socket, byte for byte: the browser client parses the
+        # device name, codec header and frame packets itself.
         while True:
-            frame = await asyncio.to_thread(session.read_frame)
-            if frame is None:
+            chunk = await asyncio.to_thread(session.read)
+            if not chunk:
                 break
-            await websocket.send_bytes(frame)
+            await websocket.send_bytes(chunk)
     except WebSocketDisconnect:
         pass
     finally:
