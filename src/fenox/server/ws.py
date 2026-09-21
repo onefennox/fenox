@@ -75,6 +75,34 @@ async def events(websocket: WebSocket) -> None:
         return
 
 
+@router.websocket("/ws/mirror/{device_id}")
+async def mirror(websocket: WebSocket, device_id: str) -> None:
+    if not _authorized(websocket):
+        await websocket.close(code=1008)
+        return
+    session = websocket.app.state.mirrors.get(device_id)
+    await websocket.accept()
+    if session is None:
+        await websocket.send_json({"type": "error", "detail": "mirroring is not running for this device"})
+        await websocket.close()
+        return
+    # The codec string first, then fragmented MP4 the browser appends to MSE.
+    await websocket.send_json({"type": "codec", "codec": session.codec})
+    try:
+        while True:
+            chunk = await asyncio.to_thread(session.read)
+            if not chunk:
+                break
+            await websocket.send_bytes(chunk)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
+
+
 @router.websocket("/ws/logcat/{device_id}")
 async def logcat(websocket: WebSocket, device_id: str) -> None:
     if not _authorized(websocket):

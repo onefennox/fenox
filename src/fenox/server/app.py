@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..core import adb, devices, mediamtx
+from ..core import adb, devices
 from ..core.auth import AuthStore
 from ..core.config import Store
 from ..core.sessions import SessionManager
@@ -65,7 +65,6 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
                 pass
         app.state.sessions = SessionManager(app.state.store)
         app.state.mirrors = {}
-        app.state.mediamtx = mediamtx.MediaMTX(app.state.store.paths.data)
         app.state.serving = {
             "reach": app.state.store.settings.get("reach"),
             "port": app.state.store.settings.get("port"),
@@ -78,7 +77,6 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
             app.state.sessions.shutdown()
             for session in list(app.state.mirrors.values()):
                 session.stop()
-            app.state.mediamtx.stop()
 
     app = FastAPI(
         title="Fenox",
