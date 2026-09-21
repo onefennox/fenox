@@ -218,7 +218,7 @@ export function AppShell() {
           </div>
         </main>
 
-        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-72 shrink-0 border-l border-[var(--color-border)] xl:block">
+        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-80 shrink-0 border-l border-[var(--color-border)] xl:block">
           <DeviceRail />
         </aside>
       </div>

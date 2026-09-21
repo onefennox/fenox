@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { connectDevice, keys, listDevices, mirrorStatus } from "@/api/queries";
 import type { Device } from "@/api/types";
@@ -16,7 +16,13 @@ import { Badge, Button, StatusDot } from "@/components/ui";
  * streamed continuously.
  */
 export function DeviceRail() {
+  const navigate = useNavigate();
   const { activeId, setActiveDevice } = useActiveDevice();
+  // Selecting here also opens the device page in the centre.
+  const select = (id: string) => {
+    setActiveDevice(id);
+    navigate(`/devices/${encodeURIComponent(id)}`);
+  };
   const { data } = useQuery({ queryKey: keys.devices, queryFn: listDevices });
   const devices = data?.devices ?? [];
   const pending = data?.pending ?? [];
@@ -25,7 +31,7 @@ export function DeviceRail() {
   if (active?.id) {
     return <DeviceScreenPane device={active} onBack={() => setActiveDevice(null)} />;
   }
-  return <DevicePicker devices={devices} pending={pending.length} onSelect={setActiveDevice} />;
+  return <DevicePicker devices={devices} pending={pending.length} onSelect={select} />;
 }
 
 function DevicePicker({
@@ -132,7 +138,7 @@ function DeviceScreenPane({ device, onBack }: { device: Device; onBack: () => vo
       </div>
 
       <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-y-auto p-4">
-        <PhoneFrame power={online} aspect={online && phase === "live" ? aspect : 9 / 19.5}>
+        <PhoneFrame power={online} slim maxWidth={300} aspect={online && phase === "live" ? aspect : 9 / 19.5}>
           {online && !unavailable ? (
             <MirrorStream
               deviceId={device.id}

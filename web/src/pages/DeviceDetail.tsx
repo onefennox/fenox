@@ -8,7 +8,6 @@ import { AppsPanel } from "./device/AppsPanel";
 import { ControlPanel } from "./device/ControlPanel";
 import { DevToolsPanel } from "./device/DevToolsPanel";
 import { FilesPanel } from "./device/FilesPanel";
-import { MirrorPanel } from "./device/MirrorPanel";
 import { OverviewPanel } from "./device/OverviewPanel";
 import { PhonePanel } from "./device/PhonePanel";
 import { ScreenInputPanel } from "./device/ScreenInputPanel";
@@ -66,7 +65,6 @@ export function DeviceDetailPage() {
       <Tabs
         tabs={[
           { id: "overview", label: "Overview", render: () => <OverviewPanel device={device} /> },
-          { id: "mirror", label: "Mirror", render: () => <MirrorPanel device={device} /> },
           { id: "screen", label: "Screen & Input", render: () => <ScreenInputPanel device={device} /> },
           { id: "apps", label: "Apps", render: () => <AppsPanel device={device} /> },
           { id: "files", label: "Files", render: () => <FilesPanel device={device} /> },

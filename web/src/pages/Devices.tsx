@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { connectDevice, deleteDevice, keys, listDevices, updateDevice } from "@/api/queries";
 import type { Device } from "@/api/types";
+import { PhoneFrame } from "@/components/PhoneFrame";
 import { useActiveDevice } from "@/hooks/useActiveDevice";
 import { Badge, Button, Card, ErrorText, Field, Input, Modal, Spinner, StatusDot } from "@/components/ui";
 
@@ -47,7 +48,7 @@ export function DevicesPage() {
         <div>
           <h1 className="text-lg font-semibold text-white">Devices</h1>
           <p className="mt-1 text-sm text-[var(--color-muted)]">
-            The phones registered with Fenox. Open one to manage it and run apps on it.
+            Your phones. Select one to view its screen and manage it.
           </p>
         </div>
         <Link to="/connect">
@@ -79,37 +80,27 @@ export function DevicesPage() {
           </Link>
         </Card>
       ) : (
-        <Card className="divide-y divide-[var(--color-border)]">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
           {devices.map((device) => (
-            <div
-              key={device.id}
-              role="button"
-              tabIndex={0}
-              aria-label={`Open ${device.id}`}
-              onClick={() => openDevice(device.id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  openDevice(device.id);
-                }
-              }}
-              className="group flex cursor-pointer items-center gap-4 p-4 transition hover:bg-[var(--color-panel-hover)] focus:bg-[var(--color-panel-hover)] focus:outline-none"
-            >
-              <StatusDot online={device.online} disabled={device.disabled} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="truncate font-medium text-white">{device.id}</span>
-                  <Badge>{device.type === "wireless" ? "wireless" : device.type === "usb" ? "usb" : device.type ?? "unknown"}</Badge>
-                  {device.disabled ? <Badge tone="warn">disabled</Badge> : null}
-                  {device.online ? <Badge tone="accent">online</Badge> : <Badge tone="warn">offline</Badge>}
-                </div>
-                <div className="truncate text-xs text-[var(--color-muted)]">
-                  {device.model ?? "Android device"}
-                  {device.serial ? ` · ${device.serial}` : ""}
-                  {device.ip ? ` · ${device.ip}${device.port ? `:${device.port}` : ""}` : ""}
-                </div>
-              </div>
-              <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+            <div key={device.id} className="flex flex-col items-center gap-2">
+              <button
+                onClick={() => openDevice(device.id)}
+                className="w-full cursor-pointer transition hover:opacity-90"
+                aria-label={`Open ${device.id}`}
+              >
+                <PhoneFrame power slim maxWidth={150}>
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 bg-gradient-to-b from-[#171b25] to-[#0b0d12] px-2 text-center">
+                    <StatusDot online={device.online} disabled={device.disabled} />
+                    <span className="w-full truncate text-xs font-medium text-white">{device.id}</span>
+                    <span className="w-full truncate text-[10px] text-[var(--color-muted)]">
+                      {device.model ?? "Android device"}
+                    </span>
+                    <Badge>{device.type === "wireless" ? "wifi" : device.type === "usb" ? "usb" : device.type ?? "—"}</Badge>
+                  </div>
+                </PhoneFrame>
+              </button>
+
+              <div className="flex flex-wrap items-center justify-center gap-1">
                 {!device.online && !device.disabled ? (
                   <Button variant="ghost" onClick={() => connect.mutate(device.id)} disabled={connect.isPending}>
                     Connect
@@ -131,10 +122,9 @@ export function DevicesPage() {
                   Remove
                 </Button>
               </div>
-              <ChevronRight size={18} className="shrink-0 text-[var(--color-muted)] transition group-hover:text-white" />
             </div>
           ))}
-        </Card>
+        </div>
       )}
 
       {(update.error || connect.error) ? (
