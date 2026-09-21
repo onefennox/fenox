@@ -23,9 +23,9 @@ ported, not reinvented.
 | M0 | Foundation: repo, core skeleton, hub, owner auth, SQLite, packaging | **done** |
 | M1 | Devices in the browser | **code complete, device verification pending** |
 | M2 | Projects, run + hot reload | **code complete, device verification pending** |
-| M3 | Device toolbox + phone data parity | **code complete (files pending), verification pending** |
-| M4 | In-browser mirroring | **next** |
-| M5 | Access: LAN/tunnel/TLS/PWA | planned |
+| M3 | Device toolbox + phone data parity | **code complete, verification pending** |
+| M4 | In-browser mirroring | **code complete, device verification pending** |
+| M5 | Access: LAN/tunnel/TLS/PWA | **next** |
 | M6 | Onboarding and guided installs | planned |
 
 ---
@@ -135,14 +135,23 @@ watch the terminal, hot reload / restart / stop, open DevTools.
 
 **Outcome:** see and control the phone screen in the browser.
 
-- [ ] `core/mirror.py`: push/start pinned scrcpy-server, `adb forward`, open sockets.
-- [ ] WebSocket byte-proxy (asyncio), no video decoding on the hub.
-- [ ] Frontend: `@yume-chan/scrcpy` + WebCodecs; touch, keyboard, clipboard.
-- [ ] Version pinning and compatibility check.
+- [x] `core/mirror.py`: push and start the installed scrcpy server, `adb forward`,
+      read the video socket (device name, codec metadata, length-delimited frames).
+- [x] WebSocket video proxy; the hub never decodes video.
+- [x] Frontend: WebCodecs decode to a canvas; tap, swipe, and key controls.
+- [x] Version and dependency check surfaced as `/mirror/status`.
+- [ ] Audio (needs scrcpy ≥ 2.0; the installed server here is 1.25).
+- [ ] `@yume-chan/scrcpy` client (not used; the minimal 1.x framing is read directly
+      and input goes through the toolbox actions).
 
 ### Exit criteria
 
 - [ ] Usable latency; touch and keyboard drive the phone.
+
+> The video proxy and decoder are implemented and build clean, but the protocol
+> is version-sensitive and unverified without a device. The hub requests
+> `send_frame_meta` and no control channel; input uses the toolbox paths, so one
+> code path drives the device whether mirroring or not.
 
 ---
 

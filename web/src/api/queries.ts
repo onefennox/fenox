@@ -150,3 +150,10 @@ export const makeDir = (id: string, path: string) =>
   api.post<{ ok: boolean }>(`${devicePath(id)}/files/mkdir`, { path });
 export const removeFile = (id: string, path: string) =>
   api.delete<{ ok: boolean }>(`${devicePath(id)}/files?path=${encodeURIComponent(path)}`);
+
+// -- mirroring -------------------------------------------------------------
+
+export const mirrorStatus = (id: string) =>
+  api.get<{ available: boolean; reason: string; version: string | null; active: boolean }>(
+    `${devicePath(id)}/mirror/status`,
+  );
