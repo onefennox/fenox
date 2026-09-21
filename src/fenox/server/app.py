@@ -16,10 +16,13 @@ from fastapi.staticfiles import StaticFiles
 from ..core import adb, devices
 from ..core.auth import AuthStore
 from ..core.config import Store
+from ..core.sessions import SessionManager
 from ..version import __version__
 from . import ws as ws_routes
 from .routes import auth as auth_routes
 from .routes import devices as device_routes
+from .routes import projects as project_routes
+from .routes import runs as run_routes
 from .routes import system as system_routes
 
 
@@ -40,11 +43,13 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
         app.state.store = store or Store(data_dir).load()
         app.state.auth = AuthStore(app.state.store.paths.auth)
         adb.configure_environment(app.state.store.settings.get("adb_port"))
+        app.state.sessions = SessionManager(app.state.store)
         app.state.watcher = devices.DeviceWatcher(app.state.store).start()
         try:
             yield
         finally:
             app.state.watcher.stop()
+            app.state.sessions.shutdown()
 
     app = FastAPI(
         title="Fenox",
@@ -57,6 +62,8 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
     app.include_router(auth_routes.router)
     app.include_router(system_routes.router)
     app.include_router(device_routes.router)
+    app.include_router(project_routes.router)
+    app.include_router(run_routes.router)
     app.include_router(ws_routes.router)
 
     web_dir = _bundled_web_dir()

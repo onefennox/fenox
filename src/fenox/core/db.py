@@ -14,7 +14,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _MIGRATION_1 = """
 CREATE TABLE settings (
@@ -66,12 +66,38 @@ CREATE INDEX idx_run_events_run ON run_events(run_id, id);
 CREATE INDEX idx_runs_started ON runs(started_at DESC);
 """
 
+_MIGRATION_2 = """
+CREATE TABLE sessions (
+    id         TEXT PRIMARY KEY,
+    project    TEXT NOT NULL,
+    device     TEXT,
+    mode       TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    pid        INTEGER,
+    argv       TEXT,
+    cwd        TEXT,
+    vm_service TEXT,
+    devtools   TEXT,
+    exit_code  INTEGER,
+    started_at TEXT NOT NULL,
+    ended_at   TEXT
+);
+
+CREATE INDEX idx_sessions_started ON sessions(started_at DESC);
+"""
+
+
 def _apply_migration_1(conn: sqlite3.Connection) -> None:
     conn.executescript(_MIGRATION_1)
 
 
+def _apply_migration_2(conn: sqlite3.Connection) -> None:
+    conn.executescript(_MIGRATION_2)
+
+
 MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (1, _apply_migration_1),
+    (2, _apply_migration_2),
 ]
 
 

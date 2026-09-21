@@ -201,6 +201,52 @@ class Store:
         )
         return [dict(row) for row in rows]
 
+    # -- sessions ----------------------------------------------------------
+    def upsert_session(self, session: dict) -> None:
+        self.db.execute(
+            "INSERT INTO sessions (id, project, device, mode, status, pid, argv, cwd, vm_service, devtools, "
+            "exit_code, started_at, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET status = excluded.status, pid = excluded.pid, "
+            "vm_service = excluded.vm_service, devtools = excluded.devtools, "
+            "exit_code = excluded.exit_code, ended_at = excluded.ended_at",
+            (
+                session["id"],
+                session["project"],
+                session.get("device"),
+                session.get("mode", "local"),
+                session["status"],
+                session.get("pid"),
+                json.dumps(session.get("argv") or []),
+                session.get("cwd"),
+                session.get("vm_service"),
+                session.get("devtools"),
+                session.get("exit_code"),
+                session["started_at"],
+                session.get("ended_at"),
+            ),
+        )
+
+    def session(self, session_id: str) -> dict | None:
+        row = self.db.query_one("SELECT * FROM sessions WHERE id = ?", (session_id,))
+        return dict(row) if row else None
+
+    def sessions(self, limit: int = 100) -> list[dict]:
+        rows = self.db.query("SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?", (limit,))
+        return [dict(row) for row in rows]
+
+    def append_run_event(self, session_id: str, stream: str, line: str) -> None:
+        self.db.execute(
+            "INSERT INTO run_events (run_id, ts, stream, line) VALUES (?, ?, ?, ?)",
+            (session_id, time.strftime("%Y-%m-%dT%H:%M:%S"), stream, line),
+        )
+
+    def run_events(self, session_id: str, limit: int = 2000) -> list[dict]:
+        rows = self.db.query(
+            "SELECT ts, stream, line FROM run_events WHERE run_id = ? ORDER BY id ASC LIMIT ?",
+            (session_id, limit),
+        )
+        return [dict(row) for row in rows]
+
     # -- migration ---------------------------------------------------------
     def import_legacy(self) -> bool:
         """Import `~/.fenox.json` once, when this database is still empty."""
