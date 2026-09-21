@@ -164,10 +164,30 @@ export const mirrorStatus = (id: string) =>
     available: boolean;
     reason: string;
     server_version: string;
+    mediamtx_version: string;
     provisioned: boolean;
-    system_scrcpy: string | null;
+    ffmpeg: string | null;
     active: boolean;
   }>(`${devicePath(id)}/mirror/status`);
+
+export const startMirror = (id: string) =>
+  api.post<{ path: string; whep: string; active: boolean }>(`${devicePath(id)}/mirror`);
+
+export const stopMirror = (id: string) => api.delete<{ active: boolean }>(`${devicePath(id)}/mirror`);
+
+export const mirrorWhep = async (id: string, offer: string): Promise<string> => {
+  const response = await fetch(`${devicePath(id)}/mirror/whep`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/sdp" },
+    body: offer,
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text || response.statusText);
+  }
+  return text;
+};
 
 // -- settings and system ---------------------------------------------------
 
