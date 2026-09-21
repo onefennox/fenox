@@ -39,6 +39,10 @@ def mirror_status(request: Request, device_id: str) -> dict:
 @router.post("/{device_id}/mirror")
 def start_mirror(request: Request, device_id: str) -> dict:
     serial = _serial(request, device_id)
+    # Replace any previous pipeline for this device rather than leaking it.
+    previous = request.app.state.mirrors.pop(device_id, None)
+    if previous is not None:
+        previous.stop()
     session = mirror.MirrorSession(serial, device_id, request.app.state.mediamtx)
     try:
         session.start()

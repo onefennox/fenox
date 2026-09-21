@@ -186,9 +186,13 @@ class MirrorSession:
         self._ffmpeg_log = log_path / f"{self.path}.ffmpeg.log"
         self._log = open(self._ffmpeg_log, "wb")
         self._ffmpeg = subprocess.Popen(
+            # Raw H.264 carries no timestamps, so ffmpeg must be told to use
+            # wallclock time, and the probe must stay smaller than the stream or
+            # ffmpeg waits for data that never comes and never opens the output.
+            # This exact set is verified against the scrcpy raw stream on a pipe.
             [ffmpeg, "-hide_banner", "-loglevel", "warning",
-             "-fflags", "nobuffer", "-flags", "low_delay",
-             "-analyzeduration", "0", "-probesize", "32",
+             "-use_wallclock_as_timestamps", "1",
+             "-probesize", "65536", "-analyzeduration", "0",
              "-f", "h264", "-i", "pipe:0",
              "-c:v", "copy", "-f", "rtsp", "-rtsp_transport", "tcp",
              f"rtsp://{mediamtx.RTSP_ADDRESS}/{self.path}"],
