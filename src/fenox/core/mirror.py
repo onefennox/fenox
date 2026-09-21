@@ -213,6 +213,7 @@ class MirrorSession:
              "-f", "h264", "-i", "pipe:0",
              "-c:v", "copy",
              "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+             "-frag_duration", "200000", "-flush_packets", "1",
              "-f", "mp4", "pipe:1"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._log,
         )
