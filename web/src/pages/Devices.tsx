@@ -5,11 +5,13 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { connectDevice, deleteDevice, keys, listDevices, updateDevice } from "@/api/queries";
 import type { Device } from "@/api/types";
+import { useActiveDevice } from "@/hooks/useActiveDevice";
 import { Badge, Button, Card, ErrorText, Field, Input, Modal, Spinner, StatusDot } from "@/components/ui";
 
 export function DevicesPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { setActiveDevice } = useActiveDevice();
   const { data, isLoading, error } = useQuery({ queryKey: keys.devices, queryFn: listDevices });
 
   const [renameTarget, setRenameTarget] = useState<Device | null>(null);
@@ -17,7 +19,10 @@ export function DevicesPage() {
   const [removeTarget, setRemoveTarget] = useState<Device | null>(null);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: keys.devices });
-  const openDevice = (deviceId: string) => navigate(`/devices/${encodeURIComponent(deviceId)}`);
+  const openDevice = (deviceId: string) => {
+    setActiveDevice(deviceId);
+    navigate(`/devices/${encodeURIComponent(deviceId)}`);
+  };
   const connect = useMutation({ mutationFn: connectDevice, onSuccess: refresh });
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: Partial<Device> & { name?: string } }) => updateDevice(id, patch),

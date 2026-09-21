@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { keys, listDevices } from "@/api/queries";
+import { useActiveDevice } from "@/hooks/useActiveDevice";
 import { Badge, Card, Spinner, StatusDot } from "@/components/ui";
 
 function Stat({ label, value }: { label: string; value: number }) {
@@ -15,6 +16,7 @@ function Stat({ label, value }: { label: string; value: number }) {
 }
 
 export function DashboardPage() {
+  const { setActiveDevice } = useActiveDevice();
   const { data, isLoading, error } = useQuery({ queryKey: keys.devices, queryFn: listDevices });
 
   if (isLoading) {
@@ -73,6 +75,7 @@ export function DashboardPage() {
               <Link
                 key={device.id}
                 to={`/devices/${encodeURIComponent(device.id)}`}
+                onClick={() => setActiveDevice(device.id)}
                 className="group flex cursor-pointer items-center gap-4 p-3 transition hover:bg-[var(--color-panel-hover)]"
               >
                 <StatusDot online={device.online} disabled={device.disabled} />

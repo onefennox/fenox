@@ -5,6 +5,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { getAuth, keys } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
 import { Spinner } from "@/components/ui";
+import { ActiveDeviceProvider } from "@/hooks/useActiveDevice";
 import { useDeviceEvents } from "@/hooks/useDeviceEvents";
 import { LiveContext } from "@/hooks/useLive";
 import { ConnectPage } from "@/pages/Connect";
@@ -49,7 +50,8 @@ export default function App() {
 
   return (
     <LiveContext.Provider value={live}>
-      <Routes>
+      <ActiveDeviceProvider>
+        <Routes>
         <Route element={<AppShell />}>
           <Route index element={<DashboardPage />} />
           <Route path="devices" element={<DevicesPage />} />
@@ -62,8 +64,9 @@ export default function App() {
           <Route path="system" element={<SystemPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
+          </Route>
+        </Routes>
+      </ActiveDeviceProvider>
     </LiveContext.Provider>
   );
 }
