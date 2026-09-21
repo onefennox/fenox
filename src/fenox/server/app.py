@@ -25,6 +25,7 @@ from .routes import files as file_routes
 from .routes import phone as phone_routes
 from .routes import projects as project_routes
 from .routes import runs as run_routes
+from .routes import settings as settings_routes
 from .routes import system as system_routes
 from .routes import toolbox as toolbox_routes
 
@@ -48,6 +49,10 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
         adb.configure_environment(app.state.store.settings.get("adb_port"))
         app.state.sessions = SessionManager(app.state.store)
         app.state.mirrors = {}
+        app.state.serving = {
+            "reach": app.state.store.settings.get("reach"),
+            "port": app.state.store.settings.get("port"),
+        }
         app.state.watcher = devices.DeviceWatcher(app.state.store).start()
         try:
             yield
@@ -73,6 +78,7 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
     app.include_router(toolbox_routes.router)
     app.include_router(phone_routes.router)
     app.include_router(file_routes.router)
+    app.include_router(settings_routes.router)
     app.include_router(ws_routes.router)
 
     web_dir = _bundled_web_dir()

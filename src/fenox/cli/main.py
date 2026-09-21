@@ -1,37 +1,65 @@
 """The `fenox` command.
 
-The terminal is the management surface: start the hub, recover the owner
-credential, and report system status. Day-to-day device and Flutter work lives in
-the web application.
+The terminal is the management surface: start the hub, manage its service, check
+system readiness, recover the owner credential, and update. Day-to-day device and
+Flutter work lives in the web application.
 """
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import shutil
+import subprocess
 import sys
 import threading
 import webbrowser
+from pathlib import Path
 
+from ..core import access
 from ..core.auth import AuthStore
 from ..core.config import Store, get_store
 from ..version import __version__
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
+SERVICE_NAME = "fenox.service"
+REPO_URL = "https://github.com/onefenox/fenox.git"
+
+
+def _resolve_bind(args: argparse.Namespace) -> tuple[str, int]:
+    store = get_store()
+    reach = str(store.settings.get("reach") or "local")
+    host = args.host or access.bind_host(reach)
+    port = args.port or int(store.settings.get("port") or DEFAULT_PORT)
+    return host, port
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
-    host = args.host
-    port = args.port
+    host, port = _resolve_bind(args)
     url_host = "localhost" if host in ("127.0.0.1", "0.0.0.0", "::") else host
-    url = f"http://{url_host}:{port}"
+    url = f"{'https' if args.tls_cert else 'http'}://{url_host}:{port}"
 
     if not args.no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
+    tls_cert = args.tls_cert or os.environ.get("FENOX_TLS_CERT")
+    tls_key = args.tls_key or os.environ.get("FENOX_TLS_KEY")
+
     print(f"Fenox {__version__} serving on {url}")
-    uvicorn.run("fenox.server.app:app", host=host, port=port, reload=args.reload, log_level=args.log_level)
+    if tls_cert:
+        print(f"  TLS: {tls_cert}")
+    uvicorn.run(
+        "fenox.server.app:app",
+        host=host,
+        port=port,
+        reload=args.reload,
+        log_level=args.log_level,
+        ssl_certfile=tls_cert,
+        ssl_keyfile=tls_key,
+    )
     return 0
 
 
@@ -55,25 +83,106 @@ def _cmd_info(_: argparse.Namespace) -> int:
     from ..core import host
 
     store = Store().load()
+    reach = str(store.settings.get("reach") or "local")
+    port = int(store.settings.get("port") or DEFAULT_PORT)
     print(f"Fenox {__version__}")
     print(f"  data directory : {store.paths.data}")
     print(f"  database       : {store.paths.db}")
     print(f"  owner set      : {AuthStore(store.paths.auth).has_owner()}")
+    print(f"  reach          : {reach} ({access.REACH_LABELS.get(reach, reach)})")
+    print(f"  urls           : {', '.join(access.urls(reach, port))}")
     print(f"  platform       : {'WSL' if host.IS_WSL else 'Linux' if host.IS_LINUX else sys.platform}")
     print(f"  adb (Windows)  : {host.find_windows_adb() or 'not found'}")
     return 0
 
 
+def _unit_path() -> Path:
+    return Path.home() / ".config" / "systemd" / "user" / SERVICE_NAME
+
+
+def _cmd_service(args: argparse.Namespace) -> int:
+    unit = _unit_path()
+    if args.service_command == "uninstall":
+        if unit.exists():
+            unit.unlink()
+            print(f"Removed {unit}")
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+        print("Run: systemctl --user stop fenox")
+        return 0
+
+    launcher = shutil.which("fenox") or str(Path(sys.argv[0]).resolve())
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text(
+        "[Unit]\n"
+        "Description=Fenox hub\n"
+        "After=network-online.target\n\n"
+        "[Service]\n"
+        "Type=simple\n"
+        f"ExecStart={launcher} serve --no-browser\n"
+        "Restart=on-failure\n"
+        "RestartSec=3\n"
+        "KillMode=mixed\n"
+        "TimeoutStopSec=15\n\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+    print(f"Installed {unit}")
+    print("Enable and start it with:")
+    print("  systemctl --user enable --now fenox")
+    return 0
+
+
+def _cmd_update(_: argparse.Namespace) -> int:
+    import importlib.metadata as metadata
+
+    source = f"fenox @ git+{REPO_URL}"
+    try:
+        direct = metadata.distribution("fenox").read_text("direct_url.json")
+        if direct:
+            data = json.loads(direct)
+            if data.get("url") and data.get("dir_info") is not None:
+                source = data["url"]
+            elif data.get("url", "").startswith("https://github.com"):
+                source = f"fenox @ git+{data['url']}"
+    except Exception:
+        pass
+
+    print(f"Updating Fenox from {source}")
+    result = subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", source])
+    if result.returncode == 0:
+        print("Updated. Restart the hub to apply: systemctl --user restart fenox")
+    return result.returncode
+
+
+def _cmd_settings(_: argparse.Namespace) -> int:
+    store = get_store()
+    reach = str(store.settings.get("reach") or "local")
+    port = int(store.settings.get("port") or DEFAULT_PORT)
+    print(f"reach          : {reach}")
+    print(f"port           : {port}")
+    print(f"remote domain  : {store.settings.get('remote_domain') or '(none)'}")
+    print(f"urls           : {', '.join(access.urls(reach, port))}")
+    for note in access.notes(reach):
+        print(f"  - {note}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="fenox", description="Android device management and Flutter development, from the browser.")
+    parser = argparse.ArgumentParser(
+        prog="fenox",
+        description="Android device management and Flutter development, from the browser.",
+    )
     parser.add_argument("--version", action="version", version=f"fenox {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     serve = sub.add_parser("serve", help="Start the Fenox hub")
-    serve.add_argument("--host", default=DEFAULT_HOST, help="Bind address (default: %(default)s)")
-    serve.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port (default: %(default)s)")
+    serve.add_argument("--host", default=None, help="Bind address (default: from reach setting)")
+    serve.add_argument("--port", type=int, default=None, help="Port (default: from settings)")
     serve.add_argument("--no-browser", action="store_true", help="Do not open a browser")
     serve.add_argument("--reload", action="store_true", help="Reload on code changes (development)")
+    serve.add_argument("--tls-cert", default=None, help="TLS certificate (or FENOX_TLS_CERT)")
+    serve.add_argument("--tls-key", default=None, help="TLS private key (or FENOX_TLS_KEY)")
     serve.add_argument("--log-level", default="info", choices=["critical", "error", "warning", "info", "debug", "trace"])
     serve.set_defaults(func=_cmd_serve)
 
@@ -83,8 +192,14 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--yes", action="store_true", help="Do not prompt for confirmation")
     reset.set_defaults(func=_cmd_auth_reset)
 
-    info = sub.add_parser("info", help="Show configuration and environment")
-    info.set_defaults(func=_cmd_info)
+    service = sub.add_parser("service", help="Manage the systemd user service")
+    service_sub = service.add_subparsers(dest="service_command", required=True)
+    service_sub.add_parser("install", help="Install the systemd user service").set_defaults(func=_cmd_service)
+    service_sub.add_parser("uninstall", help="Remove the systemd user service").set_defaults(func=_cmd_service)
+
+    sub.add_parser("settings", help="Show reach, port, and URLs").set_defaults(func=_cmd_settings)
+    sub.add_parser("update", help="Update Fenox to the latest version").set_defaults(func=_cmd_update)
+    sub.add_parser("info", help="Show configuration and environment").set_defaults(func=_cmd_info)
 
     return parser
 
@@ -93,7 +208,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
-        # No subcommand: start the hub, which is the default action.
         args = parser.parse_args(["serve"])
     return args.func(args)
 

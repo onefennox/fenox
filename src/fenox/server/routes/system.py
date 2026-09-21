@@ -6,13 +6,18 @@ from __future__ import annotations
 
 import sys
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
-from ...core import host
+from ...core import doctor, host
 from ...version import __version__
 from ..security import require_owner
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+
+
+class InstallRequest(BaseModel):
+    tool: str
 
 
 @router.get("/health")
@@ -40,3 +45,16 @@ def system_info(request: Request, _: None = Depends(require_owner)) -> dict:
         "reach": settings.get("reach"),
         "port": settings.get("port"),
     }
+
+
+@router.get("/doctor")
+def system_doctor(_: None = Depends(require_owner)) -> dict:
+    return doctor.checks()
+
+
+@router.post("/install")
+def system_install(body: InstallRequest, _: None = Depends(require_owner)) -> dict:
+    try:
+        return doctor.run_install(body.tool)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
