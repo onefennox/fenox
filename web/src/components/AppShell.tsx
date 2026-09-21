@@ -18,6 +18,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { getSystem, keys, listDevices, listRuns, logout } from "@/api/queries";
 import { useLive } from "@/hooks/useLive";
+import { DeviceRail } from "./DeviceRail";
 
 interface NavItem {
   to: string;
@@ -216,6 +217,10 @@ export function AppShell() {
             <Outlet />
           </div>
         </main>
+
+        <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-72 shrink-0 border-l border-[var(--color-border)] xl:block">
+          <DeviceRail />
+        </aside>
       </div>
     </div>
   );
