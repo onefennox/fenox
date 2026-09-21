@@ -1,8 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 
-import { keys, listDevices } from "@/api/queries";
-import { Badge, Card, Spinner, StatusDot } from "@/components/ui";
+import { connectDevice, keys, listDevices } from "@/api/queries";
+import { Badge, Button, Card, Spinner, StatusDot } from "@/components/ui";
 import { Tabs } from "@/components/Tabs";
 import { AppsPanel } from "./device/AppsPanel";
 import { ControlPanel } from "./device/ControlPanel";
@@ -17,8 +17,13 @@ export function DeviceDetailPage() {
   const { id = "" } = useParams();
   const deviceId = decodeURIComponent(id);
 
+  const queryClient = useQueryClient();
   const devices = useQuery({ queryKey: keys.devices, queryFn: listDevices });
   const device = devices.data?.devices.find((item) => item.id === deviceId);
+  const connect = useMutation({
+    mutationFn: () => connectDevice(deviceId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.devices }),
+  });
 
   if (devices.isLoading) {
     return <Spinner label="Loading device" />;
@@ -49,7 +54,13 @@ export function DeviceDetailPage() {
             {device.model ?? "Android device"}
             {device.serial ? ` · ${device.serial}` : ""}
           </span>
+          {!device.online && !device.disabled ? (
+            <Button variant="secondary" onClick={() => connect.mutate()} disabled={connect.isPending}>
+              {connect.isPending ? "Connecting…" : "Connect"}
+            </Button>
+          ) : null}
         </div>
+        {connect.error ? <p className="mt-2 text-xs text-red-400">{(connect.error as Error).message}</p> : null}
       </div>
 
       <Tabs

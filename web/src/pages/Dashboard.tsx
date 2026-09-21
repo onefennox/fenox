@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { keys, listDevices } from "@/api/queries";
-import { Card, Spinner } from "@/components/ui";
+import { Badge, Card, Spinner, StatusDot } from "@/components/ui";
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
@@ -51,10 +52,38 @@ export function DashboardPage() {
         </Card>
       ) : null}
 
-      <div className="text-sm">
-        <Link to="/devices" className="text-[var(--color-accent)] hover:underline">
-          Manage devices
-        </Link>
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-white">Devices</h2>
+          <Link to="/devices" className="text-xs text-[var(--color-accent)] hover:underline">
+            Connect a device
+          </Link>
+        </div>
+        {devices.length === 0 ? (
+          <Card className="p-6 text-sm text-[var(--color-muted)]">
+            No devices yet. Open Devices to connect a phone over USB or wireless debugging.
+          </Card>
+        ) : (
+          <Card className="divide-y divide-[var(--color-border)]">
+            {devices.map((device) => (
+              <Link
+                key={device.id}
+                to={`/devices/${encodeURIComponent(device.id)}`}
+                className="group flex cursor-pointer items-center gap-4 p-3 transition hover:bg-[var(--color-panel-hover)]"
+              >
+                <StatusDot online={device.online} disabled={device.disabled} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium text-white">{device.id}</span>
+                    <Badge>{device.type === "wireless" ? "wireless" : device.type === "usb" ? "usb" : device.type ?? "unknown"}</Badge>
+                  </div>
+                  <div className="truncate text-xs text-[var(--color-muted)]">{device.model ?? "Android device"}</div>
+                </div>
+                <ChevronRight size={16} className="shrink-0 text-[var(--color-muted)] transition group-hover:text-white" />
+              </Link>
+            ))}
+          </Card>
+        )}
       </div>
     </div>
   );

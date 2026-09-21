@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, Wifi } from "lucide-react";
+import { Cable, ChevronRight, Wifi } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import {
   connectDevice,
@@ -51,7 +51,9 @@ function ConnectCard({
 
 export function DevicesPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { data, isLoading, error } = useQuery({ queryKey: keys.devices, queryFn: listDevices });
+  const openDevice = (deviceId: string) => navigate(`/devices/${encodeURIComponent(deviceId)}`);
 
   const [pairOpen, setPairOpen] = useState(false);
   const [addressOpen, setAddressOpen] = useState(false);
@@ -189,15 +191,27 @@ export function DevicesPage() {
       ) : (
         <Card className="divide-y divide-[var(--color-border)]">
           {devices.map((device) => (
-            <div key={device.id} className="flex items-center gap-4 p-4">
+            <div
+              key={device.id}
+              role="button"
+              tabIndex={0}
+              aria-label={`Open ${device.id}`}
+              onClick={() => openDevice(device.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  openDevice(device.id);
+                }
+              }}
+              className="group flex cursor-pointer items-center gap-4 p-4 transition hover:bg-[var(--color-panel-hover)] focus:bg-[var(--color-panel-hover)] focus:outline-none"
+            >
               <StatusDot online={device.online} disabled={device.disabled} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <Link to={`/devices/${encodeURIComponent(device.id)}`} className="truncate font-medium text-white hover:underline">
-                    {device.id}
-                  </Link>
+                  <span className="truncate font-medium text-white">{device.id}</span>
                   <Badge>{device.type === "wireless" ? "wireless" : device.type === "usb" ? "usb" : device.type ?? "unknown"}</Badge>
                   {device.disabled ? <Badge tone="warn">disabled</Badge> : null}
+                  {device.online ? <Badge tone="accent">online</Badge> : <Badge tone="warn">offline</Badge>}
                 </div>
                 <div className="truncate text-xs text-[var(--color-muted)]">
                   {device.model ?? "Android device"}
@@ -205,7 +219,7 @@ export function DevicesPage() {
                   {device.ip ? ` · ${device.ip}${device.port ? `:${device.port}` : ""}` : ""}
                 </div>
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
                 {!device.online && !device.disabled ? (
                   <Button variant="ghost" onClick={() => connect.mutate(device.id)} disabled={connect.isPending}>
                     Connect
@@ -227,6 +241,10 @@ export function DevicesPage() {
                   Remove
                 </Button>
               </div>
+              <ChevronRight
+                size={18}
+                className="shrink-0 text-[var(--color-muted)] transition group-hover:text-white"
+              />
             </div>
           ))}
         </Card>
