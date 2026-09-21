@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Home, MenuSquare, Plus } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { connectDevice, keys, listDevices, mirrorStatus } from "@/api/queries";
+import { connectDevice, keys, listDevices, mirrorStatus, sendInput } from "@/api/queries";
 import type { Device } from "@/api/types";
 import { useActiveDevice } from "@/hooks/useActiveDevice";
 import { MirrorStream, type MirrorPhase } from "@/components/MirrorStream";
@@ -137,8 +137,8 @@ function DeviceScreenPane({ device, onBack }: { device: Device; onBack: () => vo
         </Link>
       </div>
 
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-y-auto p-4">
-        <PhoneFrame power={online} slim maxWidth={300} aspect={online && phase === "live" ? aspect : 9 / 19.5}>
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 overflow-y-auto p-3">
+        <PhoneFrame power={online} slim maxWidth={245} aspect={online && phase === "live" ? aspect : 9 / 19.5}>
           {online && !unavailable ? (
             <MirrorStream
               deviceId={device.id}
@@ -155,6 +155,20 @@ function DeviceScreenPane({ device, onBack }: { device: Device; onBack: () => vo
           <p className="text-xs text-[var(--color-muted)]">
             {phase === "error" ? error || "Unavailable" : "Connecting to the screen…"}
           </p>
+        ) : null}
+
+        {online ? (
+          <div className="flex items-center gap-1 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] p-1" aria-label="Phone navigation">
+            <Button variant="ghost" className="px-4" title="Back" aria-label="Back" onClick={() => void sendInput(device.id, { type: "key", key: "BACK" })}>
+              <ArrowLeft size={17} />
+            </Button>
+            <Button variant="ghost" className="px-4" title="Home" aria-label="Home" onClick={() => void sendInput(device.id, { type: "key", key: "HOME" })}>
+              <Home size={17} />
+            </Button>
+            <Button variant="ghost" className="px-4" title="Recent apps" aria-label="Recent apps" onClick={() => void sendInput(device.id, { type: "key", key: "APP_SWITCH" })}>
+              <MenuSquare size={17} />
+            </Button>
+          </div>
         ) : null}
 
         {!online && !device.disabled ? (

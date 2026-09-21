@@ -213,7 +213,7 @@ export function AppShell() {
         ) : null}
 
         <main className="min-w-0 flex-1">
-          <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6">
+          <div className="mx-auto w-full max-w-7xl px-4 py-4 sm:px-5">
             <Outlet />
           </div>
         </main>

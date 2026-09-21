@@ -8,6 +8,7 @@ def test_server_args_request_a_raw_stream():
     assert "audio=false" in args
     assert "control=false" in args
     assert "cleanup=false" in args
+    assert "video_codec_options=i-frame-interval:int=1" in args
 
 
 def test_path_for_sanitises_ids():

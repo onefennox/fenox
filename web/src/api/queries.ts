@@ -150,6 +150,17 @@ export const fileDownloadUrl = (id: string, path: string) =>
   `${devicePath(id)}/files/download?path=${encodeURIComponent(path)}`;
 export const pushFile = (id: string, local: string, remote: string) =>
   api.post<{ ok: boolean; detail: string }>(`${devicePath(id)}/files/push`, { local, remote });
+export const uploadFile = async (id: string, file: File, remote: string): Promise<{ ok: boolean; detail: string }> => {
+  const response = await fetch(`${devicePath(id)}/files/upload?path=${encodeURIComponent(remote)}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(file.name) },
+    body: file,
+  });
+  const payload = (await response.json()) as { ok?: boolean; detail?: string };
+  if (!response.ok) throw new Error(payload.detail ?? response.statusText);
+  return payload as { ok: boolean; detail: string };
+};
 export const pullFile = (id: string, remote: string, local: string) =>
   api.post<{ ok: boolean; detail: string }>(`${devicePath(id)}/files/pull`, { remote, local });
 export const makeDir = (id: string, path: string) =>

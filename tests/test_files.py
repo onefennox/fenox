@@ -22,6 +22,35 @@ def test_ls_parsing_sorts_directories_and_handles_names_with_spaces():
     assert by_name["sdcard"]["type"] == "link"
 
 
+def test_list_dir_traverses_android_storage_symlink(monkeypatch):
+    commands = []
+
+    def fake_shell(serial, command, timeout=30):
+        commands.append(command)
+        return True, "drwxrwx--x 2 u g 4096 2024-05-01 09:00 Download"
+
+    monkeypatch.setattr(files, "_shell", fake_shell)
+    entries, error = files.list_dir("SERIAL", "/sdcard")
+    assert error == ""
+    assert entries and entries[0]["name"] == "Download"
+    assert commands == ["ls -la /sdcard/"]
+
+
+def test_browser_upload_uses_filename_and_removes_temporary_file(monkeypatch):
+    captured = {}
+
+    def fake_push(serial, local, remote):
+        captured.update(serial=serial, local=local, remote=remote, data=open(local, "rb").read())
+        return True, "uploaded"
+
+    monkeypatch.setattr(files, "push", fake_push)
+    ok, detail = files.upload("SERIAL", "photo.jpg", b"image-data", "/sdcard/Pictures")
+    assert (ok, detail) == (True, "uploaded")
+    assert captured["remote"] == "/sdcard/Pictures/photo.jpg"
+    assert captured["data"] == b"image-data"
+    assert not __import__("pathlib").Path(captured["local"]).exists()
+
+
 def _client(tmp_path) -> TestClient:
     client = TestClient(create_app(data_dir=tmp_path / "data"))
     client.__enter__()

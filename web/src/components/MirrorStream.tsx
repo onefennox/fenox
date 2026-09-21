@@ -31,6 +31,16 @@ export function MirrorStream({
   onSizeChange,
 }: MirrorStreamProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  // Parent renders commonly pass inline callbacks (notably onSizeChange). Their
+  // identities change whenever the phase or aspect ratio changes, but that must
+  // not tear down and restart the scrcpy session. Keep the latest handlers in
+  // refs so only a device/interaction change owns the stream lifecycle.
+  const onPhaseChangeRef = useRef(onPhaseChange);
+  const onErrorRef = useRef(onError);
+  const onSizeChangeRef = useRef(onSizeChange);
+  onPhaseChangeRef.current = onPhaseChange;
+  onErrorRef.current = onError;
+  onSizeChangeRef.current = onSizeChange;
 
   useEffect(() => {
     let cancelled = false;
@@ -43,8 +53,8 @@ export function MirrorStream({
 
     const fail = (message: string) => {
       if (cancelled) return;
-      onPhaseChange?.("error");
-      onError?.(message);
+      onPhaseChangeRef.current?.("error");
+      onErrorRef.current?.(message);
     };
 
     const appendNext = () => {
@@ -58,18 +68,30 @@ export function MirrorStream({
       }
     };
 
-    const trimBuffer = () => {
+    const trimBuffer = (): boolean => {
       if (!sourceBuffer || !video || sourceBuffer.updating) {
-        return;
+        return false;
+      }
+      const buffered = sourceBuffer.buffered;
+      if (buffered.length === 0) return false;
+
+      // A live mirror must prefer the newest frame over smooth delayed
+      // playback. MSE otherwise happily plays every queued frame and can drift
+      // seconds behind the phone after a short CPU/network stall.
+      const liveEdge = buffered.end(buffered.length - 1);
+      if (liveEdge - video.currentTime > 0.75) {
+        video.currentTime = Math.max(buffered.start(0), liveEdge - 0.1);
       }
       const behind = video.currentTime - 0.6;
-      if (behind > 0 && sourceBuffer.buffered.length > 0 && sourceBuffer.buffered.start(0) < behind) {
+      if (behind > 0 && buffered.start(0) < behind) {
         try {
           sourceBuffer.remove(0, behind);
+          return true;
         } catch {
           // Removal is best-effort.
         }
       }
+      return false;
     };
 
     const setup = (codec: string) => {
@@ -86,8 +108,9 @@ export function MirrorStream({
           sourceBuffer = mediaSource.addSourceBuffer(mime);
           sourceBuffer.mode = "segments";
           sourceBuffer.addEventListener("updateend", () => {
-            appendNext();
-            trimBuffer();
+            // remove() and appendBuffer() cannot overlap. Trim first and let
+            // its own updateend continue the queue when removal was needed.
+            if (!trimBuffer()) appendNext();
             void video.play().catch(() => undefined);
           });
           appendNext();
@@ -99,7 +122,7 @@ export function MirrorStream({
 
     void (async () => {
       try {
-        onPhaseChange?.("connecting");
+        onPhaseChangeRef.current?.("connecting");
         const started = await startMirror(deviceId);
         if (cancelled) return;
         setup(started.codec);
@@ -113,8 +136,6 @@ export function MirrorStream({
               const message = JSON.parse(event.data) as { type?: string; codec?: string; detail?: string };
               if (message.type === "error") {
                 fail(message.detail ?? "Mirroring could not start.");
-              } else if (message.type === "codec" && message.codec) {
-                onPhaseChange?.("live");
               }
             } catch {
               // Ignore frames we cannot parse.
@@ -131,8 +152,9 @@ export function MirrorStream({
     })();
 
     if (video) {
+      video.onplaying = () => onPhaseChangeRef.current?.("live");
       video.onloadedmetadata = () => {
-        onSizeChange?.(video.videoWidth, video.videoHeight);
+        onSizeChangeRef.current?.(video.videoWidth, video.videoHeight);
         attachPointer(video, deviceId, interactive);
       };
     }
@@ -155,7 +177,7 @@ export function MirrorStream({
       }
       void stopMirror(deviceId).catch(() => undefined);
     };
-  }, [deviceId, interactive, onError, onPhaseChange, onSizeChange]);
+  }, [deviceId, interactive]);
 
   return <video ref={videoRef} autoPlay playsInline muted className={className} />;
 }

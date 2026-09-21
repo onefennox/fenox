@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import posixpath
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from ...core import devices, files
@@ -62,6 +62,22 @@ def push_file(request: Request, device_id: str, body: PushRequest) -> dict:
     ok, output = files.push(_serial(request, device_id), body.local, body.remote)
     if not ok:
         raise HTTPException(status_code=502, detail=output or "push failed")
+    return {"ok": True, "detail": output}
+
+
+@router.post("/{device_id}/files/upload")
+async def upload_file(
+    request: Request,
+    device_id: str,
+    path: str = "/sdcard",
+    file_name: str = Header(alias="X-Filename"),
+) -> dict:
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=422, detail="the uploaded file is empty")
+    ok, output = files.upload(_serial(request, device_id), unquote(file_name), data, path)
+    if not ok:
+        raise HTTPException(status_code=502, detail=output or "upload failed")
     return {"ok": True, "detail": output}
 
 

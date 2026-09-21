@@ -92,6 +92,9 @@ def server_args(version: str, *, audio: bool = False, control: bool = False) -> 
         f"audio={'true' if audio else 'false'}",
         f"control={'true' if control else 'false'}",
         "raw_stream=true",
+        # Keep recovery/join latency bounded if the browser reconnects between
+        # frames. Android encoders commonly default to much longer GOPs.
+        "video_codec_options=i-frame-interval:int=1",
         "cleanup=false",
         "log_level=info",
     ]
@@ -212,8 +215,10 @@ class MirrorSession:
              "-probesize", "65536", "-analyzeduration", "0",
              "-f", "h264", "-i", "pipe:0",
              "-c:v", "copy",
-             "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-             "-frag_duration", "200000", "-flush_packets", "1",
+             # One fragment per encoded frame avoids waiting for the phone's
+             # next keyframe/GOP before bytes reach the browser.
+             "-movflags", "frag_every_frame+empty_moov+default_base_moof",
+             "-flush_packets", "1",
              "-f", "mp4", "pipe:1"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._log,
         )

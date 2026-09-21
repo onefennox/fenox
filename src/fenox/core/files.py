@@ -9,6 +9,8 @@ from __future__ import annotations
 import posixpath
 import shlex
 import subprocess
+import tempfile
+from pathlib import Path
 
 
 def _shell(serial: str, command: str, timeout: int = 30) -> tuple[bool, str]:
@@ -55,7 +57,10 @@ def _parse_ls(path: str, output: str) -> list[dict]:
 
 def list_dir(serial: str, path: str) -> tuple[list[dict] | None, str]:
     path = path or "/sdcard"
-    ok, output = _shell(serial, f"ls -la {shlex.quote(path)}")
+    # `/sdcard` is a symlink on Android. A trailing slash tells toybox `ls` to
+    # traverse directory symlinks instead of returning the link as one entry.
+    listing_path = "/" if path == "/" else path.rstrip("/") + "/"
+    ok, output = _shell(serial, f"ls -la {shlex.quote(listing_path)}")
     if not ok:
         return None, output or f"cannot read {path}"
     return _parse_ls(path, output), ""
@@ -78,6 +83,22 @@ def push(serial: str, local_path: str, remote_path: str) -> tuple[bool, str]:
     )
     output = (proc.stdout + proc.stderr).strip()
     return proc.returncode == 0, output
+
+
+def upload(serial: str, name: str, data: bytes, remote_dir: str) -> tuple[bool, str]:
+    """Push browser-uploaded bytes to a directory on the device."""
+    safe_name = posixpath.basename(name.strip())
+    if not safe_name or safe_name in (".", ".."):
+        return False, "a valid file name is required"
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="fenox-upload-", suffix="-" + safe_name, delete=False) as handle:
+            handle.write(data)
+            temporary = Path(handle.name)
+        return push(serial, str(temporary), posixpath.join(remote_dir or "/sdcard", safe_name))
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def pull(serial: str, remote_path: str, local_path: str) -> tuple[bool, str]:
