@@ -6,6 +6,7 @@ import {
   LogOut,
   Menu,
   Play,
+  Plus,
   Settings as SettingsIcon,
   Smartphone,
   Wrench,
@@ -30,6 +31,7 @@ const ACTIVE_RUN_STATUSES = new Set(["starting", "running", "stopping"]);
 
 function titleFor(pathname: string): string {
   if (pathname === "/") return "Dashboard";
+  if (pathname.startsWith("/connect")) return "Connect a device";
   if (pathname.startsWith("/devices")) return "Devices";
   if (pathname.startsWith("/projects")) return "Projects";
   if (pathname.startsWith("/runs")) return "Runs";
@@ -69,6 +71,7 @@ export function AppShell() {
   const nav: NavItem[] = [
     { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
     { to: "/devices", label: "Devices", icon: Smartphone, badge: onlineCount },
+    { to: "/connect", label: "Connect a device", icon: Plus },
     { to: "/projects", label: "Projects", icon: FolderKanban },
     { to: "/runs", label: "Runs", icon: Play, badge: activeRuns },
     { to: "/system", label: "System", icon: Wrench },

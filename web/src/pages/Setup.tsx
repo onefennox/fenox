@@ -1,17 +1,23 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { keys, setupOwner } from "@/api/queries";
 import { Button, Card, ErrorText, Field, Input } from "@/components/ui";
 
 export function SetupPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
 
   const create = useMutation({
     mutationFn: () => setupOwner(password),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.auth }),
+    onSuccess: () => {
+      // The first useful action is connecting a phone, so go straight there.
+      queryClient.setQueryData(keys.auth, { configured: true, authenticated: true });
+      navigate("/connect", { replace: true });
+    },
   });
 
   const validation =

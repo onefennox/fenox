@@ -7,6 +7,7 @@ import { AppShell } from "@/components/AppShell";
 import { Spinner } from "@/components/ui";
 import { useDeviceEvents } from "@/hooks/useDeviceEvents";
 import { LiveContext } from "@/hooks/useLive";
+import { ConnectPage } from "@/pages/Connect";
 import { DashboardPage } from "@/pages/Dashboard";
 import { DeviceDetailPage } from "@/pages/DeviceDetail";
 import { DevicesPage } from "@/pages/Devices";
@@ -53,6 +54,7 @@ export default function App() {
           <Route index element={<DashboardPage />} />
           <Route path="devices" element={<DevicesPage />} />
           <Route path="devices/:id" element={<DeviceDetailPage />} />
+          <Route path="connect" element={<ConnectPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:name" element={<ProjectDetailPage />} />
           <Route path="runs" element={<RunsPage />} />

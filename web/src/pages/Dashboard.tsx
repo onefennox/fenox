@@ -55,13 +55,17 @@ export function DashboardPage() {
       <div>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-white">Devices</h2>
-          <Link to="/devices" className="text-xs text-[var(--color-accent)] hover:underline">
+          <Link to="/connect" className="text-xs text-[var(--color-accent)] hover:underline">
             Connect a device
           </Link>
         </div>
         {devices.length === 0 ? (
           <Card className="p-6 text-sm text-[var(--color-muted)]">
-            No devices yet. Open Devices to connect a phone over USB or wireless debugging.
+            No devices yet.{" "}
+            <Link to="/connect" className="text-[var(--color-accent)] hover:underline">
+              Connect a phone
+            </Link>{" "}
+            over USB or wireless debugging.
           </Card>
         ) : (
           <Card className="divide-y divide-[var(--color-border)]">
