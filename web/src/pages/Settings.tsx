@@ -1,13 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
-import { getSettings, rotateToken, updateSettings } from "@/api/queries";
+import { getSettings, getTools, rotateToken, updateSettings } from "@/api/queries";
 import { Button, Card, ErrorText, Field, Input, Spinner } from "@/components/ui";
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings"], queryFn: getSettings });
-  const [form, setForm] = useState({ reach: "local", port: "8787", remote_domain: "" });
+  const tools = useQuery({ queryKey: ["tools"], queryFn: getTools });
+  const [form, setForm] = useState({
+    reach: "local",
+    port: "8787",
+    remote_domain: "",
+    flutter_path: "",
+    adb_path: "",
+  });
   const [token, setToken] = useState<string | null>(null);
 
   useEffect(() => {
@@ -16,6 +23,8 @@ export function SettingsPage() {
         reach: settings.data.reach,
         port: String(settings.data.port),
         remote_domain: settings.data.remote_domain,
+        flutter_path: settings.data.flutter_path,
+        adb_path: settings.data.adb_path,
       });
       setToken(settings.data.token);
     }
@@ -23,10 +32,17 @@ export function SettingsPage() {
 
   const save = useMutation({
     mutationFn: () =>
-      updateSettings({ reach: form.reach, port: Number(form.port), remote_domain: form.remote_domain }),
+      updateSettings({
+        reach: form.reach,
+        port: Number(form.port),
+        remote_domain: form.remote_domain,
+        flutter_path: form.flutter_path,
+        adb_path: form.adb_path,
+      }),
     onSuccess: (data) => {
       setToken(data.token);
       queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ["tools"] });
     },
   });
   const rotate = useMutation({ mutationFn: rotateToken, onSuccess: (data) => setToken(data.token) });
@@ -95,6 +111,52 @@ export function SettingsPage() {
         </div>
       </Card>
 
+      <Card className="space-y-4 p-5">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-white">Tools</h2>
+          <Button variant="ghost" onClick={() => queryClient.invalidateQueries({ queryKey: ["tools"] })}>
+            Re-detect
+          </Button>
+        </div>
+        {tools.isLoading ? (
+          <Spinner label="Detecting tools" />
+        ) : tools.data ? (
+          <div className="space-y-2 text-sm">
+            <ToolLine label="adb (client)" value={tools.data.adb.client} />
+            <ToolLine label="adb (server)" value={tools.data.adb.server} />
+            <ToolLine label="Flutter" value={tools.data.flutter.path} />
+            <ToolLine
+              label="scrcpy"
+              value={tools.data.scrcpy.binary ? `${tools.data.scrcpy.binary}${tools.data.scrcpy.version ? ` (${tools.data.scrcpy.version})` : ""}` : null}
+            />
+            <ToolLine label="scrcpy server" value={tools.data.scrcpy.server} />
+          </div>
+        ) : null}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Flutter path override">
+            <Input
+              value={form.flutter_path}
+              onChange={(event) => setForm({ ...form, flutter_path: event.target.value })}
+              placeholder={tools.data?.flutter.path ?? "/home/you/flutter"}
+            />
+          </Field>
+          <Field label="adb path override">
+            <Input
+              value={form.adb_path}
+              onChange={(event) => setForm({ ...form, adb_path: event.target.value })}
+              placeholder={tools.data?.adb.client ?? "/usr/bin/adb"}
+            />
+          </Field>
+        </div>
+        <p className="text-xs text-[var(--color-muted)]">
+          Leave blank to detect automatically. A Flutter path may be the SDK directory or the binary itself.
+        </p>
+        <Button onClick={() => save.mutate()} disabled={save.isPending}>
+          Save tool paths
+        </Button>
+        <ErrorText>{(save.error as Error | null)?.message}</ErrorText>
+      </Card>
+
       <Card className="space-y-3 p-5">
         <h2 className="text-sm font-semibold text-white">Access token</h2>
         <p className="text-xs text-[var(--color-muted)]">
@@ -107,6 +169,15 @@ export function SettingsPage() {
           Rotate token
         </Button>
       </Card>
+    </div>
+  );
+}
+
+function ToolLine({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="flex justify-between border-b border-[var(--color-border)] py-1.5 text-sm last:border-0">
+      <span className="text-[var(--color-muted)]">{label}</span>
+      <span className={`truncate pl-4 text-right ${value ? "text-white" : "text-amber-300"}`}>{value ?? "not found"}</span>
     </div>
   );
 }

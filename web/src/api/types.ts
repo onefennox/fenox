@@ -180,6 +180,8 @@ export interface Settings {
   reach_levels: { id: string; label: string }[];
   port: number;
   remote_domain: string;
+  flutter_path: string;
+  adb_path: string;
   urls: string[];
   notes: string[];
   token: string | null;
@@ -203,4 +205,11 @@ export interface DoctorReport {
   adb: { windows_exe: string | null; server_port: number };
   tools: ToolCheck[];
   notes: { tone: string; text: string }[];
+}
+
+export interface ToolsReport {
+  os: string;
+  adb: { client: string | null; server: string | null; candidates: string[]; env: Record<string, string | null> };
+  flutter: { path: string | null; candidates: string[]; env: Record<string, string | null> };
+  scrcpy: { binary: string | null; version: string | null; server: string | null };
 }

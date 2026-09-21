@@ -17,6 +17,7 @@ import type {
   Settings,
   SystemInfo,
   Telemetry,
+  ToolsReport,
   Thread,
 } from "./types";
 
@@ -166,7 +167,13 @@ export const mirrorStatus = (id: string) =>
 // -- settings and system ---------------------------------------------------
 
 export const getSettings = () => api.get<Settings>("/api/settings");
-export const updateSettings = (patch: { reach?: string; port?: number; remote_domain?: string }) =>
+export const updateSettings = (patch: {
+  reach?: string;
+  port?: number;
+  remote_domain?: string;
+  flutter_path?: string;
+  adb_path?: string;
+}) =>
   api.patch<Settings>("/api/settings", patch);
 export const rotateToken = () => api.post<{ token: string }>("/api/settings/token");
 export const getDoctor = () => api.get<DoctorReport>("/api/system/doctor");
@@ -175,3 +182,5 @@ export const installTool = (tool: string) =>
     "/api/system/install",
     { tool },
   );
+
+export const getTools = () => api.get<ToolsReport>("/api/system/tools");

@@ -56,19 +56,35 @@ def scrcpy_version() -> str | None:
 
 
 def server_path() -> str | None:
-    """Locate the scrcpy-server jar that ships with the installed scrcpy."""
+    """Locate the scrcpy-server jar.
+
+    Mirrors scrcpy's own lookup: `SCRCPY_SERVER_PATH` wins, then the share
+    directory under the install prefix, then a portable copy beside the binary,
+    plus the Snap location.
+    """
+    candidates: list[str] = []
+    override = os.environ.get("SCRCPY_SERVER_PATH")
+    if override:
+        candidates.append(override)
     binary = scrcpy_binary()
-    candidates = []
     if binary:
-        prefix = os.path.dirname(os.path.dirname(os.path.realpath(binary)))
-        candidates += [os.path.join(prefix, "share", "scrcpy", "scrcpy-server")]
+        real = os.path.realpath(binary)
+        prefix = os.path.dirname(os.path.dirname(real))
+        candidates += [
+            os.path.join(prefix, "share", "scrcpy", "scrcpy-server"),
+            os.path.join(os.path.dirname(real), "scrcpy-server"),
+        ]
+        # Snap keeps the binary under /snap/<name>/... with the server in share.
+        if "/snap/" in real:
+            candidates.append(os.path.join(prefix, "share", "scrcpy", "scrcpy-server"))
     candidates += [
         "/usr/share/scrcpy/scrcpy-server",
         "/usr/local/share/scrcpy/scrcpy-server",
         "/opt/scrcpy/scrcpy-server",
+        "/snap/scrcpy/current/usr/local/share/scrcpy/scrcpy-server",
     ]
     for candidate in candidates:
-        if os.path.exists(candidate):
+        if os.path.isfile(candidate):
             return candidate
     return None
 
