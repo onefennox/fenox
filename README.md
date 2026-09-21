@@ -68,6 +68,13 @@ bash scripts/dev.sh          # install into .venv and serve with reload
 .venv/bin/mypy
 ```
 
+The web application lives in `web/` and builds into the Python package:
+
+```bash
+cd web && npm install && npm run build   # outputs to src/fenox/web
+cd web && npm run dev                    # dev server on :5173, proxies to :8787
+```
+
 The full design lives in [`docs/SPEC.md`](docs/SPEC.md).
 
 ## License

@@ -21,8 +21,8 @@ ported, not reinvented.
 | Phase | Scope | State |
 | --- | --- | --- |
 | M0 | Foundation: repo, core skeleton, hub, owner auth, SQLite, packaging | **done** |
-| M1 | Devices in the browser | **next** |
-| M2 | Projects, run + hot reload | planned |
+| M1 | Devices in the browser | **code complete, device verification pending** |
+| M2 | Projects, run + hot reload | **next** |
 | M3 | Device toolbox + phone data parity | planned |
 | M4 | In-browser mirroring | planned |
 | M5 | Access: LAN/tunnel/TLS/PWA | planned |
@@ -47,30 +47,33 @@ rename it, watch it come and go live.
 
 ### Backend
 
-- [ ] `core/adb.py` — port: shared server, device enumeration, pending states,
-      connect, pair (code + QR), mDNS candidates, reverse ports, shell.
-- [ ] `core/devices.py` — port: registry, telemetry, `autodetect`, wireless
-      autodetect, `DeviceWatcher`, health; persist through `Store`.
-- [ ] Routes:
-  - [ ] `GET /api/devices`, `POST /api/devices/discover`
-  - [ ] `POST /api/devices/{id}/connect`, `POST /api/devices/{id}/pair`
-  - [ ] `PATCH /api/devices/{id}`, `DELETE /api/devices/{id}`
-  - [ ] `GET /api/devices/{id}/telemetry`, `GET /api/devices/{id}/screenshot`
-- [ ] `WS /ws/events` — device added/removed/state changes + telemetry ticks.
-- [ ] Tests against a fake adb (no device required).
+- [x] `core/adb.py` — port: shared server, device enumeration, pending states,
+      connect, pair, mDNS candidates, reverse ports, shell.
+- [x] `core/devices.py` — port: registry, telemetry, `autodetect`, wireless
+      autodetect, `DeviceWatcher`; persist through `Store`.
+- [x] Routes:
+  - [x] `GET /api/devices`, `POST /api/devices/discover`, `POST /api/devices/pair`
+  - [x] `POST /api/devices/{id}/connect`
+  - [x] `PATCH /api/devices/{id}`, `DELETE /api/devices/{id}`
+  - [x] `GET /api/devices/{id}/telemetry`, `GET /api/devices/{id}/screenshot`
+- [x] `WS /ws/events` — live device state.
+- [x] Tests against a fake adb (no device required).
 
 ### Frontend (`web/`)
 
-- [ ] Scaffold Vite + React + TS + Tailwind + TanStack Query; build into `src/fenox/web`.
-- [ ] App shell, router, auth guard; Setup and Login screens.
-- [ ] Devices page: list with live status, connect, pair, rename, enable/disable, remove.
-- [ ] Device detail shell (empty sections to be filled in M3).
+- [x] Scaffold Vite + React + TS + Tailwind + TanStack Query; build into `src/fenox/web`.
+- [x] App shell, router, auth guard; Setup and Login screens.
+- [x] Devices page: list with live status, connect, pair, rename, enable/disable, remove.
+- [x] Device detail shell with telemetry and screen preview (filled out in M3).
 
 ### Exit criteria
 
 - [ ] A USB phone and a wireless phone both appear automatically within one refresh.
 - [ ] Renaming, disabling, and removing persist and reflect in the CLI too.
 - [ ] Disconnecting a phone marks it offline live; reconnecting restores it.
+
+> The code is complete; the exit criteria require a physical phone and are
+> verified manually before M1 is marked done.
 
 ---
 

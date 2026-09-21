@@ -47,6 +47,8 @@ def test_legacy_config_is_imported_once(tmp_path):
     store = Store(tmp_path).load()
     assert store.projects()["demo"]["path"] == "/srv/demo"
     assert store.devices()["phone"]["ip"] == "192.168.1.5"
+    # The legacy schema left `type` implicit; wireless is inferred from the IP.
+    assert store.devices()["phone"]["type"] == "wireless"
     assert store.settings["remote_domain"] == "legacy.test"
 
     # The legacy file is left in place, and a second start does not re-import.

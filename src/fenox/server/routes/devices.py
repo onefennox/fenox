@@ -119,8 +119,9 @@ def connect_device(request: Request, device_id: str) -> dict:
     return {"id": device_id, "serial": serial, "online": True}
 
 
-@router.post("/{device_id}/pair")
-def pair_device(request: Request, device_id: str, body: PairRequest) -> dict:
+@router.post("/pair")
+def pair_device(body: PairRequest) -> dict:
+    """Pair a phone by IP, pairing port, and code. No prior registration needed."""
     ok, result = adb.pair(body.ip, body.port, body.code)
     if not ok:
         raise HTTPException(status_code=409, detail=result or "pairing failed")

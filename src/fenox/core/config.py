@@ -30,6 +30,19 @@ DEFAULT_SETTINGS: dict = {
 }
 
 
+def _normalize_device(device_id: str, entry: dict) -> dict:
+    """Fill in the device `type` that the legacy schema left implicit."""
+    data = dict(entry)
+    if not data.get("type"):
+        if data.get("ip"):
+            data["type"] = "wireless"
+        elif data.get("serial"):
+            data["type"] = "usb"
+        elif device_id == "emulator" or data.get("port"):
+            data["type"] = "emulator"
+    return data
+
+
 def _default_data_dir() -> Path:
     override = os.environ.get("FENOX_DATA_DIR")
     if override:
@@ -201,7 +214,7 @@ class Store:
         except (json.JSONDecodeError, OSError):
             return False
         for device_id, entry in (data.get("devices") or {}).items():
-            self.upsert_device(device_id, entry)
+            self.upsert_device(device_id, _normalize_device(device_id, entry))
         for name, members in (data.get("groups") or {}).items():
             if isinstance(members, list):
                 self.set_group(name, members)
