@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Fenox</title>
+    <style>
+      :root {
+        --bg: #0b0d12;
+        --panel: #151922;
+        --text: #e6e9ef;
+        --muted: #8b93a7;
+        --accent: #4f8cff;
+        --border: #232936;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      main {
+        width: min(560px, 92vw);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 32px;
+      }
+      h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.01em; }
+      p { margin: 8px 0 0; color: var(--muted); }
+      .status {
+        margin-top: 20px;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 13px;
+      }
+      .ok { color: #43c59e; }
+      .warn { color: #e0b341; }
+      footer { margin-top: 20px; color: var(--muted); font-size: 13px; }
+      a { color: var(--accent); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Fenox</h1>
+      <p>Android device management and Flutter development, from the browser.</p>
+      <div class="status" id="status">Checking server status&hellip;</div>
+      <footer>
+        This is the API scaffold. The dashboard application is served here once
+        built. See <code>docs/SPEC.md</code>.
+      </footer>
+    </main>
+    <script>
+      fetch("/api/auth/me")
+        .then((r) => r.json())
+        .then((data) => {
+          const el = document.getElementById("status");
+          if (!data.configured) {
+            el.innerHTML =
+              '<span class="warn">Setup required.</span> ' +
+              'Owner authentication is not configured yet.';
+          } else if (!data.authenticated) {
+            el.innerHTML =
+              '<span class="warn">Signed out.</span> ' +
+              'Open the dashboard to sign in.';
+          } else {
+            el.innerHTML =
+              '<span class="ok">Running.</span> ' +
+              'Owner authenticated.';
+          }
+        })
+        .catch(() => {
+          document.getElementById("status").textContent =
+            "Server unreachable.";
+        });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,73 @@
+"""The Fenox hub application factory.
+
+One process serves the REST API, the WebSocket endpoints and the built
+single-page app. The factory takes an explicit data directory so tests can run
+against a temporary store without touching the owner's installation.
+"""
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from ..core.auth import AuthStore
+from ..core.config import Store
+from ..version import __version__
+from .routes import auth as auth_routes
+from .routes import system as system_routes
+
+
+def _bundled_web_dir() -> Path | None:
+    """The built SPA: packaged data first, then a source checkout."""
+    packaged = Path(__file__).resolve().parent.parent / "web"
+    if (packaged / "index.html").exists():
+        return packaged
+    repo_dist = Path(__file__).resolve().parents[3] / "web" / "dist"
+    if (repo_dist / "index.html").exists():
+        return repo_dist
+    return None
+
+
+def create_app(data_dir: Path | str | None = None, store: Store | None = None) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.store = store or Store(data_dir).load()
+        app.state.auth = AuthStore(app.state.store.paths.auth)
+        yield
+
+    app = FastAPI(
+        title="Fenox",
+        version=__version__,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
+    app.include_router(auth_routes.router)
+    app.include_router(system_routes.router)
+
+    web_dir = _bundled_web_dir()
+    if web_dir is not None:
+        assets = web_dir / "assets"
+        if assets.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+        index = web_dir / "index.html"
+
+        @app.get("/", include_in_schema=False)
+        async def index_page() -> FileResponse:
+            return FileResponse(index)
+
+        @app.get("/{path:path}", include_in_schema=False)
+        async def spa_fallback(request: Request, path: str):
+            if path.startswith("api/") or path == "api":
+                return JSONResponse({"detail": "not found"}, status_code=404)
+            return FileResponse(index)
+
+    return app
+
+
+app = create_app()

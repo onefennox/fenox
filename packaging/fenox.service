@@ -1,0 +1,17 @@
+[Unit]
+Description=Fenox — Android device management and Flutter development hub
+Documentation=https://github.com/onefenox/fenox
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/fenox/venv/bin/fenox serve --no-browser
+Restart=on-failure
+RestartSec=3
+# Keep child processes (adb, flutter, scrcpy) in the unit's cgroup so a restart
+# does not orphan a running session.
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
