@@ -75,6 +75,38 @@ async def events(websocket: WebSocket) -> None:
         return
 
 
+@router.websocket("/ws/logcat/{device_id}")
+async def logcat(websocket: WebSocket, device_id: str) -> None:
+    if not _authorized(websocket):
+        await websocket.close(code=1008)
+        return
+    store = websocket.app.state.store
+    serial = devices.live_serial(store, device_id)
+    await websocket.accept()
+    if serial is None:
+        await websocket.send_json({"type": "error", "detail": "device is offline"})
+        await websocket.close()
+        return
+
+    process = await asyncio.create_subprocess_exec(
+        "adb", "-s", serial, "logcat", "-v", "time",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        assert process.stdout is not None
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            await websocket.send_json({"type": "log", "line": line.decode("utf-8", "replace").rstrip()})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+
+
 @router.websocket("/ws/runs/{run_id}")
 async def run_stream(websocket: WebSocket, run_id: str) -> None:
     if not _authorized(websocket):

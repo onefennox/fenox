@@ -21,9 +21,11 @@ from ..version import __version__
 from . import ws as ws_routes
 from .routes import auth as auth_routes
 from .routes import devices as device_routes
+from .routes import phone as phone_routes
 from .routes import projects as project_routes
 from .routes import runs as run_routes
 from .routes import system as system_routes
+from .routes import toolbox as toolbox_routes
 
 
 def _bundled_web_dir() -> Path | None:
@@ -64,6 +66,8 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
     app.include_router(device_routes.router)
     app.include_router(project_routes.router)
     app.include_router(run_routes.router)
+    app.include_router(toolbox_routes.router)
+    app.include_router(phone_routes.router)
     app.include_router(ws_routes.router)
 
     web_dir = _bundled_web_dir()
