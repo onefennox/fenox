@@ -6,6 +6,7 @@ against a temporary store without touching the owner's installation.
 """
 from __future__ import annotations
 
+import mimetypes
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -83,11 +84,15 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
 
     web_dir = _bundled_web_dir()
     if web_dir is not None:
+        mimetypes.add_type("application/manifest+json", ".webmanifest")
+        mimetypes.add_type("text/javascript", ".js")
+
         assets = web_dir / "assets"
         if assets.is_dir():
             app.mount("/assets", StaticFiles(directory=assets), name="assets")
 
         index = web_dir / "index.html"
+        root = web_dir.resolve()
 
         @app.get("/", include_in_schema=False)
         async def index_page() -> FileResponse:
@@ -95,8 +100,14 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
 
         @app.get("/{path:path}", include_in_schema=False)
         async def spa_fallback(request: Request, path: str):
-            if path.startswith("api/") or path == "api":
+            # API paths never fall through to the SPA.
+            if path == "api" or path.startswith("api/"):
                 return JSONResponse({"detail": "not found"}, status_code=404)
+            # Serve a real file when one exists (favicon, service worker, manifest);
+            # otherwise hand back the app shell so client-side routes work.
+            candidate = (root / path).resolve()
+            if path and candidate.is_file() and root in candidate.parents:
+                return FileResponse(candidate)
             return FileResponse(index)
 
     return app

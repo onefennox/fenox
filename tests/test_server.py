@@ -43,6 +43,24 @@ def test_health_is_public_and_reports_version(tmp_path):
         assert body["version"]
 
 
+def test_root_static_files_and_spa_fallback(tmp_path):
+    app = create_app(data_dir=tmp_path)
+    with TestClient(app) as client:
+        # A real file at the root is served, not the app shell.
+        service_worker = client.get("/sw.js")
+        assert service_worker.status_code == 200
+        assert "fenox-shell" in service_worker.text
+
+        manifest = client.get("/manifest.webmanifest")
+        assert manifest.status_code == 200
+
+        # Client-side routes fall through to the app shell.
+        assert "id=\"root\"" in client.get("/devices").text
+
+        # API paths never fall through.
+        assert client.get("/api/nope").status_code == 404
+
+
 def test_bearer_token_authenticates_scripts(tmp_path):
     app = create_app(data_dir=tmp_path)
     with TestClient(app) as client:
