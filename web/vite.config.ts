@@ -15,6 +15,15 @@ export default defineConfig({
   build: {
     outDir: "../src/fenox/web",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          query: ["@tanstack/react-query"],
+          xterm: ["@xterm/xterm", "@xterm/addon-fit"],
+        },
+      },
+    },
   },
   server: {
     port: 5173,

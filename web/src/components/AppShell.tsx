@@ -7,6 +7,8 @@ import { Button } from "./ui";
 const navItems = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/devices", label: "Devices", end: false },
+  { to: "/projects", label: "Projects", end: false },
+  { to: "/runs", label: "Runs", end: false },
 ];
 
 export function AppShell() {

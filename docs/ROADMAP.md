@@ -22,8 +22,8 @@ ported, not reinvented.
 | --- | --- | --- |
 | M0 | Foundation: repo, core skeleton, hub, owner auth, SQLite, packaging | **done** |
 | M1 | Devices in the browser | **code complete, device verification pending** |
-| M2 | Projects, run + hot reload | **next** |
-| M3 | Device toolbox + phone data parity | planned |
+| M2 | Projects, run + hot reload | **code complete, device verification pending** |
+| M3 | Device toolbox + phone data parity | **next** |
 | M4 | In-browser mirroring | planned |
 | M5 | Access: LAN/tunnel/TLS/PWA | planned |
 | M6 | Onboarding and guided installs | planned |
@@ -84,27 +84,30 @@ watch the terminal, hot reload / restart / stop, open DevTools.
 
 ### Backend
 
-- [ ] `core/projects.py` — port: CRUD, scan, port/backend/URL/package detection, groups.
-- [ ] `core/flutter.py` — port: binary resolution, build, install, open, run argv.
-- [ ] `core/sessions.py` — **new** supervisor:
-  - [ ] spawn `flutter run` under a pty with `--pid-file`
-  - [ ] poll pid-file, parse VM Service + DevTools URLs
-  - [ ] `SIGUSR1` reload, `SIGUSR2` restart, `SIGINT`/`SIGTERM` stop
-  - [ ] ring buffer + subscriber fan-out; multi-device sessions
-  - [ ] orphan detection on boot
-- [ ] Routes: `/api/projects*`, `/api/runs*`, `WS /ws/runs/{id}`, `/ws/events`.
-- [ ] Tests using a fake `flutter` binary that installs signal handlers.
+- [x] `core/projects.py` — CRUD, scan, port/backend/URL/package detection.
+- [x] `core/flutter.py` — binary resolution, run/build argv.
+- [x] `core/sessions.py` — supervisor:
+  - [x] spawn `flutter run` under a pty with `--pid-file`
+  - [x] poll pid-file, parse VM Service + DevTools URLs
+  - [x] `SIGUSR1` reload, `SIGUSR2` restart, `SIGINT`/`SIGTERM` stop
+  - [x] transcript buffer + subscriber fan-out
+  - [x] orphan detection on boot
+- [x] Routes: `/api/projects*`, `/api/runs*`, `/api/runs/batch`, `WS /ws/runs/{id}`.
+- [x] Tests using a fake `flutter` binary that installs signal handlers.
 
 ### Frontend
 
-- [ ] Projects list, add/scan, edit (path, backend URLs, ports).
-- [ ] Run page: live xterm.js terminal, Reload / Restart / Stop, DevTools link, status.
-- [ ] Multi-device run grid.
+- [x] Projects list, add, scan, edit (port, local/remote API and socket URLs).
+- [x] Run page: live xterm.js terminal, Reload / Restart / Stop, DevTools link, status.
+- [x] Runs page: active-run grid with live terminals, plus history.
 
 ### Exit criteria
 
 - [ ] Run a real Flutter app from the browser and hot-reload it.
 - [ ] Stop leaves no orphan process; history records the run.
+
+> The code is complete and covered by an automated fake-flutter test; the exit
+> criteria are verified against a real Flutter SDK and phone before M2 is done.
 
 ---
 

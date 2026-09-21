@@ -9,6 +9,10 @@ import { DashboardPage } from "@/pages/Dashboard";
 import { DeviceDetailPage } from "@/pages/DeviceDetail";
 import { DevicesPage } from "@/pages/Devices";
 import { LoginPage } from "@/pages/Login";
+import { ProjectDetailPage } from "@/pages/ProjectDetail";
+import { ProjectsPage } from "@/pages/Projects";
+import { RunPage } from "@/pages/Run";
+import { RunsPage } from "@/pages/Runs";
 import { SetupPage } from "@/pages/Setup";
 
 export default function App() {
@@ -42,6 +46,10 @@ export default function App() {
         <Route index element={<DashboardPage />} />
         <Route path="devices" element={<DevicesPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />
+        <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:name" element={<ProjectDetailPage />} />
+        <Route path="runs" element={<RunsPage />} />
+        <Route path="runs/:id" element={<RunPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

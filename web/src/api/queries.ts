@@ -1,5 +1,14 @@
 import { api } from "./client";
-import type { AuthState, Device, DeviceList, DiscoverResult, SystemInfo, Telemetry } from "./types";
+import type {
+  AuthState,
+  Device,
+  DeviceList,
+  DiscoverResult,
+  Project,
+  Run,
+  SystemInfo,
+  Telemetry,
+} from "./types";
 
 export const keys = {
   auth: ["auth"] as const,
@@ -7,6 +16,10 @@ export const keys = {
   device: (id: string) => ["device", id] as const,
   telemetry: (id: string) => ["telemetry", id] as const,
   system: ["system"] as const,
+  projects: ["projects"] as const,
+  project: (id: string) => ["project", id] as const,
+  runs: ["runs"] as const,
+  run: (id: string) => ["run", id] as const,
 };
 
 export const getAuth = () => api.get<AuthState>("/api/auth/me");
@@ -26,3 +39,21 @@ export const updateDevice = (id: string, patch: Partial<Device> & { name?: strin
   api.patch<Device>(`/api/devices/${id}`, patch);
 export const deleteDevice = (id: string) => api.delete<void>(`/api/devices/${id}`);
 export const getTelemetry = (id: string) => api.get<{ telemetry: Telemetry }>(`/api/devices/${id}/telemetry`);
+
+export const listProjects = () => api.get<{ projects: Record<string, Project> }>("/api/projects");
+export const getProject = (id: string) => api.get<{ id: string; project: Project }>(`/api/projects/${id}`);
+export const createProject = (payload: { name: string; path: string; update?: boolean }) =>
+  api.post<{ id: string; project: Project }>("/api/projects", payload);
+export const updateProject = (id: string, patch: Partial<Project>) =>
+  api.patch<{ id: string; project: Project }>(`/api/projects/${id}`, patch);
+export const deleteProject = (id: string) => api.delete<void>(`/api/projects/${id}`);
+export const scanProjects = () => api.post<{ added: string[]; projects: Record<string, Project> }>("/api/projects/scan");
+
+export const listRuns = () => api.get<{ runs: Run[] }>("/api/runs");
+export const getRun = (id: string) => api.get<Run>(`/api/runs/${id}`);
+export const startRun = (project: string, device: string, mode: "local" | "remote") =>
+  api.post<Run>("/api/runs", { project, device, mode });
+export const startBatchRun = (project: string, mode: "local" | "remote") =>
+  api.post<{ started: Run[]; failed: { device: string; error: string }[] }>("/api/runs/batch", { project, mode });
+export const controlRun = (id: string, action: "reload" | "restart" | "stop") =>
+  api.post<{ ok: boolean }>(`/api/runs/${id}/${action}`);
