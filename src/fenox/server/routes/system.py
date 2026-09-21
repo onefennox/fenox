@@ -48,8 +48,8 @@ def system_info(request: Request, _: None = Depends(require_owner)) -> dict:
 
 
 @router.get("/doctor")
-def system_doctor(_: None = Depends(require_owner)) -> dict:
-    return doctor.checks()
+def system_doctor(request: Request, _: None = Depends(require_owner)) -> dict:
+    return doctor.checks(request.app.state.store.settings)
 
 
 @router.post("/install")
@@ -58,3 +58,9 @@ def system_install(body: InstallRequest, _: None = Depends(require_owner)) -> di
         return doctor.run_install(body.tool)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/tools")
+def system_tools(request: Request, _: None = Depends(require_owner)) -> dict:
+    """How adb, Flutter and scrcpy were resolved, and the candidates considered."""
+    return doctor.tools(request.app.state.store.settings)

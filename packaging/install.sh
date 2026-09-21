@@ -55,7 +55,17 @@ if [ -z "$PYTHON" ]; then
   exit 1
 fi
 
+# --- environment detection ----------------------------------------------------
+# The hub runs the same on Linux and WSL; on WSL the Windows adb is the one that
+# can see USB, so tell the user which environment this is.
+if grep -qi microsoft /proc/version 2>/dev/null || [ -n "${WSL_DISTRO_NAME:-}" ]; then
+  FENOX_ENV="WSL${WSL_DISTRO_NAME:+ (${WSL_DISTRO_NAME})}"
+else
+  FENOX_ENV="Linux"
+fi
+
 echo "Installing Fenox"
+echo "  environment: ${FENOX_ENV}"
 echo "  python     : $($PYTHON --version)"
 echo "  data dir   : ${DATA_DIR}"
 echo "  launcher   : ${BIN_DIR}/fenox"
@@ -77,11 +87,31 @@ fi
 
 ln -sf "${VENV_DIR}/bin/fenox" "${BIN_DIR}/fenox"
 
+# --- tool detection -----------------------------------------------------------
+echo
+"${VENV_DIR}/bin/fenox" doctor || true
+
+# If Flutter was not found, offer to record its location now.
+if ! "${VENV_DIR}/bin/fenox" config get flutter_path 2>/dev/null | grep -q .; then
+  FOUND_FLUTTER="$("${VENV_DIR}/bin/fenox" doctor 2>/dev/null | awk '/^  flutter /{print $3}')"
+  if [ -z "${FOUND_FLUTTER}" ] || [ "${FOUND_FLUTTER}" = "not" ]; then
+    if [ -t 0 ] && [ -z "${FENOX_SKIP_PROMPTS:-}" ]; then
+      printf 'Flutter was not found. Enter the path to your Flutter SDK (blank to skip): '
+      read -r FLUTTER_PATH || FLUTTER_PATH=""
+      if [ -n "${FLUTTER_PATH}" ]; then
+        "${VENV_DIR}/bin/fenox" config set flutter_path "${FLUTTER_PATH}"
+      else
+        echo "Skipped. You can set it later with: fenox config set flutter_path /path/to/flutter"
+      fi
+    else
+      echo "Set it later with: fenox config set flutter_path /path/to/flutter"
+    fi
+  fi
+fi
+
+# --- service ------------------------------------------------------------------
 if [ "${INSTALL_SERVICE}" -eq 1 ] && command -v systemctl >/dev/null 2>&1; then
-  UNIT_DIR="${HOME}/.config/systemd/user"
-  mkdir -p "${UNIT_DIR}"
-  sed "s|%h/.local/share/fenox/venv/bin/fenox|${VENV_DIR}/bin/fenox|" \
-    "${REPO_DIR}/packaging/fenox.service" > "${UNIT_DIR}/fenox.service" 2>/dev/null || true
+  "${VENV_DIR}/bin/fenox" service install || true
 fi
 
 echo
@@ -93,5 +123,5 @@ case ":${PATH}:" in
 esac
 if [ "${INSTALL_SERVICE}" -eq 1 ] && [ -f "${HOME}/.config/systemd/user/fenox.service" ]; then
   echo "Or run it in the background:"
-  echo "  systemctl --user daemon-reload && systemctl --user enable --now fenox"
+  echo "  systemctl --user enable --now fenox"
 fi

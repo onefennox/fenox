@@ -16,7 +16,7 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from ..core import access
+from ..core import access, doctor
 from ..core.auth import AuthStore
 from ..core.config import Store, get_store
 from ..version import __version__
@@ -25,6 +25,8 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 SERVICE_NAME = "fenox.service"
 REPO_URL = "https://github.com/onefenox/fenox.git"
+CONFIG_KEYS = ("reach", "port", "remote_domain", "projects_dir", "flutter_path", "adb_path", "adb_port")
+INT_KEYS = {"port", "adb_port"}
 
 
 def _resolve_bind(args: argparse.Namespace) -> tuple[str, int]:
@@ -80,20 +82,76 @@ def _cmd_auth_reset(args: argparse.Namespace) -> int:
 
 
 def _cmd_info(_: argparse.Namespace) -> int:
-    from ..core import host
-
     store = Store().load()
     reach = str(store.settings.get("reach") or "local")
     port = int(store.settings.get("port") or DEFAULT_PORT)
+    resolved = doctor.tools(store.settings)
     print(f"Fenox {__version__}")
     print(f"  data directory : {store.paths.data}")
     print(f"  database       : {store.paths.db}")
     print(f"  owner set      : {AuthStore(store.paths.auth).has_owner()}")
     print(f"  reach          : {reach} ({access.REACH_LABELS.get(reach, reach)})")
     print(f"  urls           : {', '.join(access.urls(reach, port))}")
-    print(f"  platform       : {'WSL' if host.IS_WSL else 'Linux' if host.IS_LINUX else sys.platform}")
-    print(f"  adb (Windows)  : {host.find_windows_adb() or 'not found'}")
+    print(f"  os             : {resolved['os']}")
+    print(f"  adb (client)   : {resolved['adb']['client'] or 'not found'}")
+    print(f"  flutter        : {resolved['flutter']['path'] or 'not found'}")
+    print(f"  scrcpy server  : {resolved['scrcpy']['server'] or 'not found'}")
     return 0
+
+
+def _cmd_doctor(_: argparse.Namespace) -> int:
+    store = get_store()
+    resolved = doctor.tools(store.settings)
+    report = doctor.checks(store.settings)
+
+    print(f"Fenox {__version__} environment")
+    print(f"  os             : {resolved['os']}")
+    print(f"  adb (client)   : {resolved['adb']['client'] or 'not found'}")
+    print(f"  adb (server)   : {resolved['adb']['server'] or 'not found'}")
+    print(f"  flutter        : {resolved['flutter']['path'] or 'not found'}")
+    scrcpy = resolved["scrcpy"]
+    version = f" ({scrcpy['version']})" if scrcpy.get("version") else ""
+    print(f"  scrcpy         : {scrcpy['binary'] or 'not found'}{version}")
+    print(f"  scrcpy server  : {scrcpy['server'] or 'not found'}")
+    print()
+    for tool in report["tools"]:
+        state = "ok" if tool["present"] else ("missing" if tool["required"] else "optional")
+        print(f"  [{state:>8}] {tool['name']:<12} {tool['version']}")
+
+    if not resolved["flutter"]["path"]:
+        print("\nFlutter was not found. Set its location with:")
+        print("  fenox config set flutter_path /path/to/flutter")
+    for note in report["notes"]:
+        print(f"\n  {note['text']}")
+    return 0
+
+
+def _cmd_config(args: argparse.Namespace) -> int:
+    store = get_store()
+    command = getattr(args, "config_command", None) or "list"
+    if command == "list":
+        for key in CONFIG_KEYS:
+            print(f"{key} = {store.settings.get(key)}")
+        return 0
+    if command == "get":
+        print(store.settings.get(args.key, ""))
+        return 0
+    if command == "set":
+        if args.key not in CONFIG_KEYS:
+            print(f"Unknown setting: {args.key}", file=sys.stderr)
+            print(f"Known: {', '.join(CONFIG_KEYS)}", file=sys.stderr)
+            return 2
+        value: object = args.value
+        if args.key in INT_KEYS:
+            try:
+                value = int(str(args.value))
+            except ValueError:
+                print(f"{args.key} must be a number", file=sys.stderr)
+                return 2
+        store.settings[args.key] = value
+        print(f"{args.key} = {value}")
+        return 0
+    return 2
 
 
 def _unit_path() -> Path:
@@ -197,9 +255,22 @@ def build_parser() -> argparse.ArgumentParser:
     service_sub.add_parser("install", help="Install the systemd user service").set_defaults(func=_cmd_service)
     service_sub.add_parser("uninstall", help="Remove the systemd user service").set_defaults(func=_cmd_service)
 
+    sub.add_parser("doctor", help="Detect adb, Flutter, scrcpy and other tools").set_defaults(func=_cmd_doctor)
     sub.add_parser("settings", help="Show reach, port, and URLs").set_defaults(func=_cmd_settings)
     sub.add_parser("update", help="Update Fenox to the latest version").set_defaults(func=_cmd_update)
     sub.add_parser("info", help="Show configuration and environment").set_defaults(func=_cmd_info)
+
+    config = sub.add_parser("config", help="Read or set a setting")
+    config_sub = config.add_subparsers(dest="config_command")
+    config_sub.add_parser("list", help="List all settings").set_defaults(func=_cmd_config)
+    config_get = config_sub.add_parser("get", help="Print one setting")
+    config_get.add_argument("key")
+    config_get.set_defaults(func=_cmd_config)
+    config_set = config_sub.add_parser("set", help="Set one setting")
+    config_set.add_argument("key")
+    config_set.add_argument("value")
+    config_set.set_defaults(func=_cmd_config)
+    config.set_defaults(func=_cmd_config)
 
     return parser
 

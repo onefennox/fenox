@@ -1,24 +1,21 @@
 """The adb layer: one shared server, device listing, connect, pairing discovery.
 
-On WSL the Linux adb server cannot see USB devices, so every part of Fenox routes
-adb traffic to the Windows adb server on a dedicated port. This module is the one
-place that knows that, so the hub, the CLI and the doctor cannot disagree about
-which server holds the devices.
+adb is resolved through `host`, so on Linux we use the local adb and on WSL we
+prefer the Windows adb that can see USB. Commands are passed as argument lists
+with a Python-side timeout, never through a shell.
 """
 from __future__ import annotations
 
 import os
 import re
-import subprocess
+import socket
 import time
 
-from .host import ADB_EXE, run_cmd
+from . import host
 
 DEFAULT_SERVER_PORT = 5038
 
-# Adb honours ANDROID_ADB_SERVER_PORT; set it for this process and every child
-# (flutter, scrcpy, adb) so they all see the same devices. Remember the shell's
-# original value so the doctor can explain a mismatch.
+# Remember the shell's original value so the doctor can explain a mismatch.
 SHELL_ADB_PORT = os.environ.get("ANDROID_ADB_SERVER_PORT")
 
 
@@ -30,50 +27,56 @@ def server_port() -> int:
 
 
 def configure_environment(port: int | None = None) -> int:
-    """Point this process and its children at the shared adb server."""
+    """Point this process and every child at the shared adb server."""
     resolved = port or server_port()
     os.environ["ANDROID_ADB_SERVER_PORT"] = str(resolved)
     return resolved
 
 
-def ensure_server() -> None:
+def _client() -> str | None:
+    return host.adb_client()
+
+
+def _run(args: list[str], timeout: float = 10) -> host.Result:
+    client = _client()
+    if client is None:
+        return host.Result(False, None, "", "adb was not found on this machine")
+    return host.run([client, "-P", str(server_port()), *args], timeout=timeout)
+
+
+def ensure_server() -> bool:
     """Make sure the shared adb server is listening (idempotent, silent)."""
-    port = configure_environment()
-    try:
-        probe = subprocess.run(
-            [ADB_EXE, "-P", str(port), "devices"],
-            capture_output=True, text=True, timeout=8, stdin=subprocess.DEVNULL,
-        )
-        if probe.returncode == 0 and "List of devices" in probe.stdout:
-            return
-    except Exception:
-        pass
-    try:
-        # Under mirrored networking a Linux adb server may have squatted the
-        # shared port (it cannot see USB). Evict it so Windows adb can bind.
-        squat = run_cmd("ss -tlnp 2>/dev/null")
+    server = host.adb_server_binary()
+    if server is None:
+        return False
+    port = str(server_port())
+
+    probe = host.run([server, "-P", port, "devices"], timeout=8)
+    if probe.ok and "List of devices" in probe.stdout:
+        return True
+
+    # Under WSL mirrored networking a Linux adb server may have squatted the
+    # shared port (and it cannot see USB). Evict it so Windows adb can bind.
+    if host.HOST.is_wsl or host.HOST.is_linux:
+        squat = host.run_cmd("ss -tlnp 2>/dev/null")
         for line in squat.splitlines():
             if f":{port} " in line and "adb" in line:
                 match = re.search(r"pid=(\d+)", line)
                 if match:
-                    run_cmd(f"kill {match.group(1)} 2>/dev/null")
-                    time.sleep(1)
+                    try:
+                        os.kill(int(match.group(1)), 15)
+                        time.sleep(1)
+                    except (ProcessLookupError, PermissionError, ValueError):
+                        pass
                 break
-    except Exception:
-        pass
-    try:
-        subprocess.run(
-            ["/mnt/c/Windows/System32/taskkill.exe", "/IM", "adb.exe", "/F"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8,
-        )
+
+    if host.HOST.is_wsl:
+        host.run(["/mnt/c/Windows/System32/taskkill.exe", "/IM", "adb.exe", "/F"], timeout=8)
         time.sleep(1)
-        subprocess.Popen(
-            [ADB_EXE, "-P", str(port), "start-server"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        time.sleep(2)
-    except Exception:
-        pass
+
+    host.run([server, "-P", port, "start-server"], timeout=10)
+    time.sleep(1)
+    return True
 
 
 _devices_cache: dict = {"ts": 0.0, "out": ""}
@@ -81,13 +84,12 @@ _devices_cache: dict = {"ts": 0.0, "out": ""}
 
 def devices_output() -> str:
     """`adb devices` output, cached briefly so one screen refresh is one call."""
-    import time as _time
-
-    now = _time.time()
+    now = time.time()
     if now - _devices_cache["ts"] < 1.5:
         return _devices_cache["out"]
-    out = run_cmd("timeout 5 adb devices")
-    _devices_cache.update(ts=_time.time(), out=out)
+    result = _run(["devices"], timeout=5)
+    out = result.stdout if result.ok else ""
+    _devices_cache.update(ts=time.time(), out=out)
     return out
 
 
@@ -117,14 +119,14 @@ def pending_devices() -> list[tuple[str, str]]:
 
 
 def connect(ip: str, port: str | int) -> tuple[bool, str]:
-    result = run_cmd(f"timeout 8 adb connect {ip}:{port}")
-    ok = any(token in result.lower() for token in ("connected", "already connected"))
-    return ok, result
+    result = _run(["connect", f"{ip}:{port}"], timeout=8)
+    text = result.stdout or result.stderr
+    ok = any(token in text.lower() for token in ("connected", "already connected"))
+    return ok, text
 
 
 def mdns_port(ip: str) -> str | None:
-    """The current wireless-debugging port for an IP, via mDNS."""
-    for line in run_cmd("adb mdns services 2>/dev/null").splitlines():
+    for line in _run(["mdns", "services"], timeout=6).stdout.splitlines():
         if ip in line and "_adb-tls-connect" in line:
             parts = line.split()
             if len(parts) >= 3 and ":" in parts[2]:
@@ -135,7 +137,7 @@ def mdns_port(ip: str) -> str | None:
 def mdns_candidates() -> list[tuple[str, str]]:
     """[(ip, port)] phones advertising wireless debugging."""
     found = []
-    for line in run_cmd("timeout 6 adb mdns services 2>/dev/null").splitlines():
+    for line in _run(["mdns", "services"], timeout=6).stdout.splitlines():
         if "_adb-tls-connect" not in line:
             continue
         parts = line.split()
@@ -148,29 +150,31 @@ def mdns_candidates() -> list[tuple[str, str]]:
 
 
 def pair(ip: str, port: str | int, code: str) -> tuple[bool, str]:
-    result = run_cmd(f"adb pair {ip}:{port} {code}")
-    return "Successfully paired" in result, result
+    result = _run(["pair", f"{ip}:{port}", code], timeout=20)
+    text = result.stdout or result.stderr
+    return "Successfully paired" in text, text
 
 
 def reverse(serial: str, ports: list[str | int]) -> None:
     for port in ports:
-        run_cmd(f"adb -s {serial} reverse tcp:{port} tcp:{port}")
+        _run(["-s", serial, "reverse", f"tcp:{port}", f"tcp:{port}"], timeout=8)
 
 
 def shell(serial: str, command: str, timeout: int = 40) -> str:
-    return run_cmd(f"timeout {timeout} adb -s {serial} shell {command}")
+    return _run(["-s", serial, "shell", command], timeout=timeout).stdout
 
 
 def getprop(serial: str, prop: str, timeout: int = 4) -> str:
-    return run_cmd(f"timeout {timeout} adb -s {serial} shell getprop {prop}").strip()
+    return _run(["-s", serial, "shell", "getprop", prop], timeout=timeout).stdout.strip()
 
 
 def local_ip() -> str:
-    """This machine's local IP, for wireless pairing."""
-    ip = run_cmd("ip route get 1 2>/dev/null | awk '{print $(NF-2); exit}'")
-    if ip:
-        return ip
-    ip = run_cmd("hostname -I 2>/dev/null | awk '{print $1}'")
-    if ip:
-        return ip
-    return run_cmd("ifconfig 2>/dev/null | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}' | head -1")
+    """This machine's outbound local IP, without shelling out."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("8.8.8.8", 80))
+        return probe.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        probe.close()

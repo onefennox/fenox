@@ -7,6 +7,7 @@ against a temporary store without touching the owner's installation.
 from __future__ import annotations
 
 import mimetypes
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -47,6 +48,8 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
     async def lifespan(app: FastAPI):
         app.state.store = store or Store(data_dir).load()
         app.state.auth = AuthStore(app.state.store.paths.auth)
+        if app.state.store.settings.get("adb_path"):
+            os.environ["FENOX_ADB_PATH"] = str(app.state.store.settings["adb_path"])
         adb.configure_environment(app.state.store.settings.get("adb_port"))
         app.state.sessions = SessionManager(app.state.store)
         app.state.mirrors = {}

@@ -27,6 +27,8 @@ DEFAULT_SETTINGS: dict = {
     "reach": "local",          # local | lan | remote
     "port": 8787,
     "adb_port": 5038,
+    "flutter_path": "",        # optional override; detection is used when empty
+    "adb_path": "",            # optional override
 }
 
 

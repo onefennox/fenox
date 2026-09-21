@@ -1,28 +1,23 @@
 """Run supervisor: spawn `flutter run`, stream it, and control it.
 
-Flutter installs signal handlers when `--pid-file` is used: SIGUSR1 hot reloads
-and SIGUSR2 hot restarts. That is the supported control path, so Fenox signals
-the tool instead of scraping a terminal or writing to stdin.
-
-Each `(project, device)` pair is one session. A session runs the child under a
-pseudo-terminal so coloured output renders correctly in the browser, keeps a
-bounded transcript on disk, and fans output out to any number of WebSocket
-subscribers.
+Each `(project, device)` pair is one session. The transport (pseudo-terminal and
+signals, or pipes and stdin keys) lives in `session_io`; the supervisor only
+decides when to reload, restart or stop, keeps a bounded transcript, and fans
+output out to WebSocket subscribers.
 """
 from __future__ import annotations
 
 import os
-import pty
 import queue
 import re
 import signal
-import subprocess
 import threading
 import time
 from collections import deque
 from datetime import datetime
 
-from . import devices, flutter
+from . import devices, flutter, session_io
+from .session_io import SIGINT, SIGKILL, SIGTERM
 
 BUFFER_LINES = 5000
 
@@ -59,38 +54,22 @@ class Session:
         self._buffer: deque[str] = deque(maxlen=BUFFER_LINES)
         self._subscribers: set[queue.Queue] = set()
         self._lock = threading.RLock()
-        self._master: int | None = None
-        self._popen: subprocess.Popen | None = None
         self._partial = ""
         self._stop_requested = False
         self._log_path = os.path.join(manager.state_dir, session_id, "output.log")
+        self._pid_file = os.path.join(manager.state_dir, session_id, "flutter.pid")
+        # The caller supplies the arguments without the pid file; append it here so
+        # the path is always under our session directory.
+        self._io = session_io.create_io([*argv, "--pid-file", self._pid_file], self.cwd, dict(os.environ))
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
         os.makedirs(os.path.dirname(self._log_path), exist_ok=True)
-        pid_file = os.path.join(self.manager.state_dir, self.id, "flutter.pid")
-        argv = list(self.argv)
-        # The caller supplies the arguments without the pid file; add it here so
-        # the path is always under our session directory.
-        argv += ["--pid-file", pid_file]
-
-        master, slave = pty.openpty()
-        self._popen = subprocess.Popen(
-            argv,
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            cwd=self.cwd,
-            env=dict(os.environ),
-            start_new_session=True,
-            close_fds=True,
-        )
-        os.close(slave)
-        self._master = master
+        self._io.start()
         self._persist()
 
         threading.Thread(target=self._read_loop, daemon=True, name=f"fenox-log-{self.id}").start()
-        threading.Thread(target=self._pid_loop, args=(pid_file,), daemon=True, name=f"fenox-pid-{self.id}").start()
+        threading.Thread(target=self._pid_loop, args=(self._pid_file,), daemon=True, name=f"fenox-pid-{self.id}").start()
         threading.Thread(target=self._wait_loop, daemon=True, name=f"fenox-wait-{self.id}").start()
 
     def _persist(self) -> None:
@@ -115,12 +94,8 @@ class Session:
             time.sleep(0.1)
 
     def _read_loop(self) -> None:
-        assert self._master is not None
         while True:
-            try:
-                chunk = os.read(self._master, 8192)
-            except OSError:
-                break
+            chunk = self._io.read()
             if not chunk:
                 break
             self._ingest(chunk.decode("utf-8", "replace"))
@@ -161,14 +136,8 @@ class Session:
                 self._broadcast({"type": "status", **self.summary()})
 
     def _wait_loop(self) -> None:
-        assert self._popen is not None
-        code = self._popen.wait()
-        if self._master is not None:
-            try:
-                os.close(self._master)
-            except OSError:
-                pass
-            self._master = None
+        code = self._io.wait()
+        self._io.close()
         self.exit_code = code
         self.ended_at = _now()
         if self._stop_requested:
@@ -183,19 +152,22 @@ class Session:
 
     # -- control -----------------------------------------------------------
     def reload(self) -> bool:
-        return self._signal(signal.SIGUSR1)
+        return self._control("USR1", b"r")
 
     def restart(self) -> bool:
-        return self._signal(signal.SIGUSR2)
+        return self._control("USR2", b"R")
 
-    def _signal(self, number: int) -> bool:
-        if not self.pid:
-            return False
-        try:
-            os.kill(self.pid, number)
-            return True
-        except (ProcessLookupError, PermissionError):
-            return False
+    def _control(self, signal_name: str, key: bytes) -> bool:
+        number = getattr(signal, f"SIG{signal_name}", None)
+        if self.pid and number is not None:
+            try:
+                os.kill(self.pid, number)
+                return True
+            except (ProcessLookupError, PermissionError):
+                return False
+        # No pid yet, or no signals on this platform: send the key Flutter reads.
+        self._io.write(key)
+        return True
 
     def stop(self, timeout: float = 8.0) -> None:
         self._stop_requested = True
@@ -203,25 +175,19 @@ class Session:
             self.status = "stopping"
             self._persist()
             self._broadcast({"type": "status", **self.summary()})
-        popen = self._popen
-        if popen is None:
+        if self._io.poll() is not None:
             return
-        for number in (signal.SIGINT, signal.SIGTERM):
-            if popen.poll() is not None:
+        for number in (SIGINT, SIGTERM):
+            if self._io.poll() is not None:
                 return
-            try:
-                os.killpg(os.getpgid(popen.pid), number)
-            except (ProcessLookupError, PermissionError):
-                return
+            self._io.signal_group(number)
             deadline = time.time() + timeout / 2
             while time.time() < deadline:
-                if popen.poll() is not None:
+                if self._io.poll() is not None:
                     return
                 time.sleep(0.1)
-        try:
-            os.killpg(os.getpgid(popen.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        if self._io.poll() is None:
+            self._io.signal_group(SIGKILL)
 
     # -- subscribers -------------------------------------------------------
     def subscribe(self) -> queue.Queue:
@@ -283,7 +249,6 @@ class SessionManager:
         self._mark_orphans()
 
     def _mark_orphans(self) -> None:
-        """Sessions recorded as running whose process is gone are marked lost."""
         for row in self.store.sessions(limit=200):
             if row["status"] in ("starting", "running", "stopping"):
                 pid = row.get("pid")
@@ -298,7 +263,8 @@ class SessionManager:
         if entry is None:
             raise KeyError(f"unknown project: {project_id}")
 
-        issues = flutter.preflight(entry)
+        flutter_bin = flutter.resolve(self.store.settings.get("flutter_path"), entry.get("path"))
+        issues = flutter.preflight(flutter_bin, entry)
         if issues:
             raise ValueError("; ".join(issues))
 
@@ -306,8 +272,9 @@ class SessionManager:
         if serial is None:
             raise ValueError(f"device '{device_id}' is not reachable")
 
+        assert flutter_bin is not None
         session_id = f"{project_id}-{device_id}-{int(time.time() * 1000) % 100000000}"
-        argv = flutter.run_argv(entry, serial, mode)
+        argv = flutter.run_argv(flutter_bin, entry, serial, mode)
 
         session = Session(self, session_id, project_id, entry, device_id, serial, mode, argv)
         with self._lock:

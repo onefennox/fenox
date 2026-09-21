@@ -13,13 +13,15 @@ from ..security import require_owner
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depends(require_owner)])
 
-EDITABLE = ("reach", "port", "remote_domain")
+EDITABLE = ("reach", "port", "remote_domain", "flutter_path", "adb_path")
 
 
 class SettingsUpdate(BaseModel):
     reach: str | None = None
     port: int | None = None
     remote_domain: str | None = None
+    flutter_path: str | None = None
+    adb_path: str | None = None
 
 
 def _view(request: Request) -> dict:
@@ -36,6 +38,8 @@ def _view(request: Request) -> dict:
         "reach_levels": [{"id": level, "label": access.REACH_LABELS[level]} for level in access.REACH_LEVELS],
         "port": port,
         "remote_domain": settings.get("remote_domain") or "",
+        "flutter_path": settings.get("flutter_path") or "",
+        "adb_path": settings.get("adb_path") or "",
         "urls": access.urls(reach, port),
         "notes": access.notes(reach),
         "token": request.app.state.auth.token(),
@@ -61,6 +65,10 @@ def update_settings(request: Request, body: SettingsUpdate) -> dict:
         store.settings["port"] = body.port
     if body.remote_domain is not None:
         store.settings["remote_domain"] = body.remote_domain.strip()
+    if body.flutter_path is not None:
+        store.settings["flutter_path"] = body.flutter_path.strip()
+    if body.adb_path is not None:
+        store.settings["adb_path"] = body.adb_path.strip()
     return _view(request)
 
 

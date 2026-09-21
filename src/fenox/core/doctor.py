@@ -7,10 +7,11 @@ runs `sudo` for you.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
-from . import adb, host
+from . import adb, host, mirror
 
 # name, what it is for, whether Fenox needs it, and how to get it.
 TOOLS = [
@@ -52,8 +53,21 @@ def _version(binary: str, name: str) -> str:
     return first[0][:80] if first else ""
 
 
-def _check_tool(name: str) -> dict:
-    binary = shutil.which(name)
+def _binary_for(name: str, settings: dict) -> str | None:
+    """Resolve a tool the same way the rest of Fenox does.
+
+    adb and Flutter are special: they may be configured, or live somewhere
+    outside PATH, so `shutil.which` alone would report false negatives.
+    """
+    if name == "adb":
+        return host.adb_client(settings.get("adb_path"))
+    if name == "flutter":
+        return host.find_flutter(settings.get("flutter_path"))
+    return shutil.which(name)
+
+
+def _check_tool(name: str, settings: dict) -> dict:
+    binary = _binary_for(name, settings)
     return {
         "name": name,
         "present": binary is not None,
@@ -62,11 +76,12 @@ def _check_tool(name: str) -> dict:
     }
 
 
-def checks() -> dict:
+def checks(settings: dict | None = None) -> dict:
     """Environment report: each tool, the adb topology, and platform notes."""
+    settings = settings or {}
     tools = []
     for name, purpose, required, package in TOOLS:
-        found = _check_tool(name)
+        found = _check_tool(name, settings)
         found.update({
             "purpose": purpose,
             "required": required,
@@ -92,6 +107,36 @@ def checks() -> dict:
         "adb": {"windows_exe": windows_adb, "server_port": adb.server_port()},
         "tools": tools,
         "notes": notes,
+    }
+
+
+def tools(settings: dict | None = None) -> dict:
+    """How each critical tool was resolved, and what was considered.
+
+    This is what the installer and the Settings page use to explain *why* a tool
+    was or was not found, instead of only reporting presence.
+    """
+    settings = settings or {}
+    adb_path = settings.get("adb_path") or None
+    flutter_path = settings.get("flutter_path") or None
+    return {
+        "os": host.HOST.os,
+        "adb": {
+            "client": host.adb_client(adb_path),
+            "server": host.adb_server_binary(adb_path),
+            "candidates": host.adb_candidates(adb_path),
+            "env": {key: os.environ.get(key) for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT", "ANDROID_ADB_SERVER_PORT")},
+        },
+        "flutter": {
+            "path": host.find_flutter(flutter_path),
+            "candidates": host.flutter_candidates(flutter_path),
+            "env": {"FLUTTER_ROOT": os.environ.get("FLUTTER_ROOT")},
+        },
+        "scrcpy": {
+            "binary": mirror.scrcpy_binary(),
+            "version": mirror.scrcpy_version(),
+            "server": mirror.server_path(),
+        },
     }
 
 
