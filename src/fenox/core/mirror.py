@@ -1,43 +1,34 @@
-"""Screen mirroring through an official scrcpy-server.
+"""Screen mirroring: scrcpy H.264 -> ffmpeg -> MediaMTX -> WebRTC.
 
-Fenox provisions and pins its own scrcpy-server (see `scrcpy_server`) so
-mirroring does not depend on whatever the host's `scrcpy` package happens to
-ship. The hub pushes that server, opens scrcpy's default reverse tunnel, and
-proxies the raw video socket to the browser, which parses and decodes it with
-the Tango scrcpy client.
+The device's hardware H.264 is passed through untouched: the scrcpy server runs
+in raw mode (no device/codec/frame headers), ffmpeg remuxes the stream to RTSP
+without re-encoding, and MediaMTX republishes it as WebRTC (WHEP) for the
+browser. The hub does no video work.
 
-Tunnel facts, from the server's own behavior (v3.3.3):
-
-* With `scid=-1` the abstract socket is named `scrcpy`.
-* With `tunnel_forward=false` (the default) the server *connects out* to that
-  socket, for video, then audio, then control. The hub listens locally and maps
-  the device socket to it with `adb reverse localabstract:scrcpy tcp:PORT`.
-* With `send_device_meta`/`send_codec_meta` the stream begins with a 64-byte
-  device name and a 12-byte codec header; the browser's client consumes them.
-
-Audio and the scrcpy control channel are disabled: input goes through the
-toolbox actions, so one code path drives the device with or without mirroring.
+The reverse tunnel is the one the scrcpy server expects: the hub listens, maps
+the device's abstract socket to it with `adb reverse`, and the server connects
+back.
 """
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
-import struct
 import subprocess
+import threading
 from pathlib import Path
+from typing import IO
 
-from . import host, scrcpy_server
+from . import host, mediamtx, scrcpy_server
 
 SOCKET_NAME = "scrcpy"
 SERVER_REMOTE_PATH = "/data/local/tmp/scrcpy-server.jar"
-DEVICE_NAME_SIZE = 64
-CODEC_META_SIZE = 12
 
 _VERSION_CACHE: str | None = None
 
 
-# --- locally installed scrcpy (used for discovery and as a fallback) --------
+# --- locally installed scrcpy (discovery only) ------------------------------
 
 def scrcpy_binary() -> str | None:
     return shutil.which("scrcpy")
@@ -85,37 +76,38 @@ def server_path() -> str | None:
     return None
 
 
-# --- protocol helpers -------------------------------------------------------
+# --- helpers ----------------------------------------------------------------
 
 def server_args(version: str, *, audio: bool = False, control: bool = False) -> list[str]:
-    """Server options as the 2.x/3.x server accepts them.
+    """Server options for a raw H.264 stream.
 
-    The first argument must be the exact server version. `cleanup=false` keeps
-    the server from deleting its own jar, which would break the next start.
+    `raw_stream=true` drops the device-name, codec and frame headers, so the
+    socket is pure Annex B H.264 that ffmpeg can remux directly. `cleanup=false`
+    keeps the server from deleting its own jar. The first argument must be the
+    exact server version.
     """
     return [
         version,
         f"audio={'true' if audio else 'false'}",
         f"control={'true' if control else 'false'}",
+        "raw_stream=true",
         "cleanup=false",
         "log_level=info",
     ]
 
 
-def parse_codec_meta(data: bytes) -> dict:
-    if len(data) < CODEC_META_SIZE:
-        raise ValueError("short codec metadata")
-    codec, width, height = struct.unpack(">4sII", data[:CODEC_META_SIZE])
-    return {"codec": codec.decode("ascii", "replace"), "width": width, "height": height}
+def path_for(device_id: str) -> str:
+    return "device_" + re.sub(r"[^A-Za-z0-9_]", "_", device_id)
 
 
-def available(cache_dir: Path | str | None = None) -> tuple[bool, str]:
-    """Whether mirroring can run, with the reason when it cannot."""
+def available(data_dir: Path | str | None = None) -> tuple[bool, str]:
     if host.adb_client() is None:
         return False, "adb was not found on this machine"
-    override = os.environ.get("FENOX_SCRCPY_SERVER")
+    if mediamtx.ffmpeg_binary() is None:
+        return False, "ffmpeg was not found on this machine"
+    override = os.environ.get("FENOX_MEDIAMTX")
     if override and not os.path.isfile(override):
-        return False, f"FENOX_SCRCPY_SERVER points at a missing file: {override}"
+        return False, f"FENOX_MEDIAMTX points at a missing file: {override}"
     return True, ""
 
 
@@ -124,28 +116,22 @@ def _port_arg() -> int:
     return adb.current_port() or adb.server_port()
 
 
-def _recv_exact(sock: socket.socket, size: int) -> bytes:
-    buffer = bytearray()
-    while len(buffer) < size:
-        chunk = sock.recv(size - len(buffer))
-        if not chunk:
-            raise ConnectionError("the scrcpy stream closed early")
-        buffer += chunk
-    return bytes(buffer)
-
-
 class MirrorSession:
-    """One running scrcpy server and its video socket."""
+    """scrcpy + ffmpeg publishing one device to MediaMTX."""
 
-    def __init__(self, serial: str, cache_dir: Path | str | None = None, version: str | None = None):
+    def __init__(self, serial: str, device_id: str, mediamtx_server: mediamtx.MediaMTX,
+                 version: str | None = None):
         self.serial = serial
-        self.cache_dir = Path(cache_dir) if cache_dir else Path(os.environ.get("FENOX_DATA_DIR", "."))
+        self.path = path_for(device_id)
+        self.mediamtx = mediamtx_server
         self.version = version or scrcpy_server.PINNED_VERSION
         self._server: subprocess.Popen | None = None
+        self._ffmpeg: subprocess.Popen | None = None
         self._listener: socket.socket | None = None
         self._sock: socket.socket | None = None
+        self._pump: threading.Thread | None = None
+        self._log: IO[bytes] | None = None
         self._port = 0
-        self.started = False
 
     def _adb(self, args: list[str], timeout: int = 30) -> str:
         client = host.adb_client()
@@ -155,7 +141,8 @@ class MirrorSession:
         return result.stdout or result.stderr
 
     def start(self) -> None:
-        jar = scrcpy_server.ensure(self.cache_dir, self.version)
+        self.mediamtx.start()
+        jar = scrcpy_server.ensure(self.mediamtx.data_dir, self.version)
 
         pushed = self._adb(["push", str(jar), SERVER_REMOTE_PATH], timeout=120)
         if "1 file pushed" not in pushed:
@@ -167,7 +154,6 @@ class MirrorSession:
         self._listener.listen(1)
         self._listener.settimeout(20)
         self._port = self._listener.getsockname()[1]
-
         self._adb(["reverse", f"localabstract:{SOCKET_NAME}", f"tcp:{self._port}"], timeout=30)
 
         binary = host.adb_client()
@@ -190,20 +176,46 @@ class MirrorSession:
             if self._listener is not None:
                 self._listener.close()
                 self._listener = None
-        self.started = True
 
-    def read(self, size: int = 65536) -> bytes:
-        """Raw bytes from the video socket, or b"" when the stream ends.
+        ffmpeg = mediamtx.ffmpeg_binary()
+        if ffmpeg is None:
+            self.stop()
+            raise RuntimeError("ffmpeg was not found")
+        log_path = Path(self.mediamtx.data_dir) / "mirror"
+        log_path.mkdir(parents=True, exist_ok=True)
+        self._ffmpeg_log = log_path / f"{self.path}.ffmpeg.log"
+        self._log = open(self._ffmpeg_log, "wb")
+        self._ffmpeg = subprocess.Popen(
+            [ffmpeg, "-hide_banner", "-loglevel", "warning",
+             "-fflags", "nobuffer", "-flags", "low_delay",
+             "-analyzeduration", "0", "-probesize", "32",
+             "-f", "h264", "-i", "pipe:0",
+             "-c:v", "copy", "-f", "rtsp", "-rtsp_transport", "tcp",
+             f"rtsp://{mediamtx.RTSP_ADDRESS}/{self.path}"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self._log,
+        )
+        self._pump = threading.Thread(target=self._pipe, daemon=True, name=f"fenox-mirror-{self.path}")
+        self._pump.start()
 
-        The device name and codec header are not stripped: the browser client
-        parses them itself.
-        """
-        if self._sock is None:
-            return b""
+    def _pipe(self) -> None:
+        """Copy the raw H.264 socket into ffmpeg until the stream ends."""
+        sock = self._sock
+        ffmpeg = self._ffmpeg
+        assert sock is not None and ffmpeg is not None and ffmpeg.stdin is not None
         try:
-            return self._sock.recv(size)
-        except OSError:
-            return b""
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                ffmpeg.stdin.write(chunk)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                if ffmpeg.stdin:
+                    ffmpeg.stdin.close()
+            except OSError:
+                pass
 
     def stop(self) -> None:
         if self._sock is not None:
@@ -218,6 +230,25 @@ class MirrorSession:
             except OSError:
                 pass
             self._listener = None
+        if self._pump is not None:
+            self._pump.join(timeout=3)
+            self._pump = None
+        if self._ffmpeg is not None:
+            try:
+                self._ffmpeg.terminate()
+                self._ffmpeg.wait(timeout=5)
+            except Exception:
+                try:
+                    self._ffmpeg.kill()
+                except Exception:
+                    pass
+            self._ffmpeg = None
+        if self._log is not None:
+            try:
+                self._log.close()
+            except OSError:
+                pass
+            self._log = None
         if self._server is not None:
             try:
                 self._server.terminate()
@@ -230,4 +261,3 @@ class MirrorSession:
             self._server = None
         if self._port:
             self._adb(["reverse", "--remove", f"localabstract:{SOCKET_NAME}"], timeout=10)
-        self.started = False

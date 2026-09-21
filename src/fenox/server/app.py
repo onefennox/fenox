@@ -15,7 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..core import adb, devices
+from ..core import adb, devices, mediamtx
 from ..core.auth import AuthStore
 from ..core.config import Store
 from ..core.sessions import SessionManager
@@ -24,6 +24,7 @@ from . import ws as ws_routes
 from .routes import auth as auth_routes
 from .routes import devices as device_routes
 from .routes import files as file_routes
+from .routes import mirror as mirror_routes
 from .routes import phone as phone_routes
 from .routes import projects as project_routes
 from .routes import runs as run_routes
@@ -64,6 +65,7 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
                 pass
         app.state.sessions = SessionManager(app.state.store)
         app.state.mirrors = {}
+        app.state.mediamtx = mediamtx.MediaMTX(app.state.store.paths.data)
         app.state.serving = {
             "reach": app.state.store.settings.get("reach"),
             "port": app.state.store.settings.get("port"),
@@ -76,6 +78,7 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
             app.state.sessions.shutdown()
             for session in list(app.state.mirrors.values()):
                 session.stop()
+            app.state.mediamtx.stop()
 
     app = FastAPI(
         title="Fenox",
@@ -94,6 +97,7 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
     app.include_router(phone_routes.router)
     app.include_router(file_routes.router)
     app.include_router(settings_routes.router)
+    app.include_router(mirror_routes.router)
     app.include_router(ws_routes.router)
 
     web_dir = _bundled_web_dir()

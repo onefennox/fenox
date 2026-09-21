@@ -12,7 +12,6 @@ import queue
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..core import adb, devices
-from ..core.mirror import MirrorSession
 from .security import COOKIE_NAME
 
 router = APIRouter()
@@ -74,43 +73,6 @@ async def events(websocket: WebSocket) -> None:
             await asyncio.sleep(EVENT_INTERVAL)
     except WebSocketDisconnect:
         return
-
-
-@router.websocket("/ws/mirror/{device_id}")
-async def mirror(websocket: WebSocket, device_id: str) -> None:
-    if not _authorized(websocket):
-        await websocket.close(code=1008)
-        return
-    store = websocket.app.state.store
-    serial = devices.live_serial(store, device_id)
-    await websocket.accept()
-    if serial is None:
-        await websocket.send_json({"type": "error", "detail": "device is offline"})
-        await websocket.close()
-        return
-
-    session = MirrorSession(serial, cache_dir=store.paths.data)
-    try:
-        await asyncio.to_thread(session.start)
-    except Exception as exc:
-        await websocket.send_json({"type": "error", "detail": str(exc)})
-        await websocket.close()
-        return
-
-    websocket.app.state.mirrors[device_id] = session
-    try:
-        # The raw video socket, byte for byte: the browser client parses the
-        # device name, codec header and frame packets itself.
-        while True:
-            chunk = await asyncio.to_thread(session.read)
-            if not chunk:
-                break
-            await websocket.send_bytes(chunk)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        session.stop()
-        websocket.app.state.mirrors.pop(device_id, None)
 
 
 @router.websocket("/ws/logcat/{device_id}")

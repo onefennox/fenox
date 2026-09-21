@@ -1,21 +1,20 @@
-import struct
-
-from fenox.core import host, mirror
+from fenox.core import host, mediamtx, mirror
 
 
-def test_server_args_match_the_server_contract():
+def test_server_args_request_a_raw_stream():
     args = mirror.server_args("3.3.3")
     # The first argument must be the exact server version.
     assert args[0] == "3.3.3"
-    # video only, no control channel, and the jar must not self-delete.
+    # Raw H.264 for ffmpeg, no audio or control channel, and no self-delete.
+    assert "raw_stream=true" in args
     assert "audio=false" in args
     assert "control=false" in args
     assert "cleanup=false" in args
 
 
-def test_parse_codec_meta_reads_codec_and_size():
-    data = struct.pack(">4sII", b"h264", 1080, 1920)
-    assert mirror.parse_codec_meta(data) == {"codec": "h264", "width": 1080, "height": 1920}
+def test_path_for_sanitises_ids():
+    assert mirror.path_for("s21+usb") == "device_s21_usb"
+    assert mirror.path_for("192.168.1.9:5555") == "device_192_168_1_9_5555"
 
 
 def test_available_requires_adb(monkeypatch):
@@ -25,17 +24,18 @@ def test_available_requires_adb(monkeypatch):
     assert "adb" in reason
 
 
-def test_available_rejects_a_missing_override(tmp_path, monkeypatch):
+def test_available_requires_ffmpeg(monkeypatch):
     monkeypatch.setattr(host, "adb_client", lambda configured=None: "/usr/bin/adb")
-    monkeypatch.setenv("FENOX_SCRCPY_SERVER", str(tmp_path / "nope"))
+    monkeypatch.setattr(mediamtx, "ffmpeg_binary", lambda: None)
     ok, reason = mirror.available()
     assert ok is False
-    assert "missing" in reason
+    assert "ffmpeg" in reason
 
 
-def test_available_when_adb_is_present(tmp_path, monkeypatch):
+def test_available_when_ready(monkeypatch):
     monkeypatch.setattr(host, "adb_client", lambda configured=None: "/usr/bin/adb")
-    monkeypatch.delenv("FENOX_SCRCPY_SERVER", raising=False)
+    monkeypatch.setattr(mediamtx, "ffmpeg_binary", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.delenv("FENOX_MEDIAMTX", raising=False)
     ok, reason = mirror.available()
     assert ok is True and reason == ""
 
@@ -53,4 +53,5 @@ def test_mirror_status_route(tmp_path, monkeypatch):
         body = client.get("/api/devices/phone/mirror/status").json()
         assert body["available"] is True
         assert body["server_version"] == scrcpy_server.PINNED_VERSION
+        assert body["mediamtx_version"] == mediamtx.PINNED_VERSION
         assert body["active"] is False
