@@ -156,3 +156,20 @@ export interface DeviceInfo {
   battery: Record<string, string>;
   storage: string;
 }
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  type: "dir" | "file" | "link";
+  size: number;
+  modified: string;
+  mode: string;
+  owner: string;
+  group: string;
+}
+
+export interface FileList {
+  path: string;
+  parent: string;
+  entries: FileEntry[];
+}

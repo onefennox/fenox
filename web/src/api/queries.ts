@@ -9,6 +9,7 @@ import type {
   DeviceInfo,
   DeviceList,
   DiscoverResult,
+  FileList,
   Message,
   Project,
   Run,
@@ -134,3 +135,18 @@ export const getContacts = (id: string, search?: string) =>
 export const getCalendars = (id: string) => api.get<{ calendars: Calendar[] }>(`${devicePath(id)}/phone/calendars`);
 export const getEvents = (id: string, days = 7) =>
   api.get<{ events: CalendarEvent[] }>(`${devicePath(id)}/phone/events?days=${days}`);
+
+// -- files -----------------------------------------------------------------
+
+export const listFiles = (id: string, path: string) =>
+  api.get<FileList>(`${devicePath(id)}/files?path=${encodeURIComponent(path)}`);
+export const fileDownloadUrl = (id: string, path: string) =>
+  `${devicePath(id)}/files/download?path=${encodeURIComponent(path)}`;
+export const pushFile = (id: string, local: string, remote: string) =>
+  api.post<{ ok: boolean; detail: string }>(`${devicePath(id)}/files/push`, { local, remote });
+export const pullFile = (id: string, remote: string, local: string) =>
+  api.post<{ ok: boolean; detail: string }>(`${devicePath(id)}/files/pull`, { remote, local });
+export const makeDir = (id: string, path: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/files/mkdir`, { path });
+export const removeFile = (id: string, path: string) =>
+  api.delete<{ ok: boolean }>(`${devicePath(id)}/files?path=${encodeURIComponent(path)}`);
