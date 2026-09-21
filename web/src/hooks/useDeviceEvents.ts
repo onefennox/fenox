@@ -6,9 +6,10 @@ import type { Device, DeviceEvent, DeviceList } from "@/api/types";
 
 /**
  * Subscribe to the hub's device event stream and keep the devices query in sync.
- * Reconnects with a short backoff while the app is mounted.
+ * Reconnects with a short backoff while the app is mounted, and reports the
+ * connection state so the shell can show whether updates are live.
  */
-export function useDeviceEvents(enabled: boolean): void {
+export function useDeviceEvents(enabled: boolean, onConnection?: (connected: boolean) => void): void {
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -38,6 +39,7 @@ export function useDeviceEvents(enabled: boolean): void {
 
     const connect = () => {
       socket = new WebSocket(`${protocol}://${window.location.host}/ws/events`);
+      socket.onopen = () => onConnection?.(true);
       socket.onmessage = (event) => {
         try {
           apply(JSON.parse(event.data) as DeviceEvent);
@@ -46,6 +48,7 @@ export function useDeviceEvents(enabled: boolean): void {
         }
       };
       socket.onclose = () => {
+        onConnection?.(false);
         if (!stopped) {
           reconnect = window.setTimeout(connect, 2000);
         }
@@ -55,10 +58,11 @@ export function useDeviceEvents(enabled: boolean): void {
     connect();
     return () => {
       stopped = true;
+      onConnection?.(false);
       if (reconnect) {
         window.clearTimeout(reconnect);
       }
       socket?.close();
     };
-  }, [enabled, queryClient]);
+  }, [enabled, onConnection, queryClient]);
 }

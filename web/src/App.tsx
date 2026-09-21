@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { getAuth, keys } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
 import { Spinner } from "@/components/ui";
 import { useDeviceEvents } from "@/hooks/useDeviceEvents";
+import { LiveContext } from "@/hooks/useLive";
 import { DashboardPage } from "@/pages/Dashboard";
 import { DeviceDetailPage } from "@/pages/DeviceDetail";
 import { DevicesPage } from "@/pages/Devices";
@@ -19,7 +21,9 @@ import { SystemPage } from "@/pages/System";
 
 export default function App() {
   const auth = useQuery({ queryKey: keys.auth, queryFn: getAuth });
-  useDeviceEvents(Boolean(auth.data?.authenticated));
+  const [live, setLive] = useState(false);
+  const handleConnection = useCallback((connected: boolean) => setLive(connected), []);
+  useDeviceEvents(Boolean(auth.data?.authenticated), handleConnection);
 
   if (auth.isLoading) {
     return (
@@ -43,19 +47,21 @@ export default function App() {
   }
 
   return (
-    <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<DashboardPage />} />
-        <Route path="devices" element={<DevicesPage />} />
-        <Route path="devices/:id" element={<DeviceDetailPage />} />
-        <Route path="projects" element={<ProjectsPage />} />
-        <Route path="projects/:name" element={<ProjectDetailPage />} />
-        <Route path="runs" element={<RunsPage />} />
-        <Route path="runs/:id" element={<RunPage />} />
-        <Route path="system" element={<SystemPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
+    <LiveContext.Provider value={live}>
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route index element={<DashboardPage />} />
+          <Route path="devices" element={<DevicesPage />} />
+          <Route path="devices/:id" element={<DeviceDetailPage />} />
+          <Route path="projects" element={<ProjectsPage />} />
+          <Route path="projects/:name" element={<ProjectDetailPage />} />
+          <Route path="runs" element={<RunsPage />} />
+          <Route path="runs/:id" element={<RunPage />} />
+          <Route path="system" element={<SystemPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </LiveContext.Provider>
   );
 }
