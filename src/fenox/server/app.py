@@ -47,12 +47,15 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
         app.state.auth = AuthStore(app.state.store.paths.auth)
         adb.configure_environment(app.state.store.settings.get("adb_port"))
         app.state.sessions = SessionManager(app.state.store)
+        app.state.mirrors = {}
         app.state.watcher = devices.DeviceWatcher(app.state.store).start()
         try:
             yield
         finally:
             app.state.watcher.stop()
             app.state.sessions.shutdown()
+            for session in list(app.state.mirrors.values()):
+                session.stop()
 
     app = FastAPI(
         title="Fenox",

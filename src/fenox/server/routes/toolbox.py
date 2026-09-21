@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from ...core import devices, phone, toolbox
+from ...core import devices, mirror, phone, toolbox
 from ..security import require_owner
 
 router = APIRouter(prefix="/api/devices", tags=["toolbox"], dependencies=[Depends(require_owner)])
@@ -199,6 +199,19 @@ def run_shell(request: Request, device_id: str, body: ShellAction) -> dict:
     serial = _serial(request, device_id)
     ok, output = phone.shell(serial, body.command, timeout=60)
     return {"ok": ok, "output": output}
+
+
+# -- mirroring -------------------------------------------------------------
+
+@router.get("/{device_id}/mirror/status")
+def mirror_status(request: Request, device_id: str) -> dict:
+    ok, reason = mirror.available()
+    return {
+        "available": ok,
+        "reason": reason,
+        "version": mirror.scrcpy_version(),
+        "active": device_id in request.app.state.mirrors,
+    }
 
 
 # -- diagnostics -----------------------------------------------------------

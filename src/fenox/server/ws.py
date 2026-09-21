@@ -12,6 +12,7 @@ import queue
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..core import adb, devices
+from ..core.mirror import MirrorSession
 from .security import COOKIE_NAME
 
 router = APIRouter()
@@ -73,6 +74,42 @@ async def events(websocket: WebSocket) -> None:
             await asyncio.sleep(EVENT_INTERVAL)
     except WebSocketDisconnect:
         return
+
+
+@router.websocket("/ws/mirror/{device_id}")
+async def mirror(websocket: WebSocket, device_id: str) -> None:
+    if not _authorized(websocket):
+        await websocket.close(code=1008)
+        return
+    store = websocket.app.state.store
+    serial = devices.live_serial(store, device_id)
+    await websocket.accept()
+    if serial is None:
+        await websocket.send_json({"type": "error", "detail": "device is offline"})
+        await websocket.close()
+        return
+
+    session = MirrorSession(serial)
+    try:
+        await asyncio.to_thread(session.start)
+    except Exception as exc:
+        await websocket.send_json({"type": "error", "detail": str(exc)})
+        await websocket.close()
+        return
+
+    websocket.app.state.mirrors[device_id] = session
+    await websocket.send_json({"type": "meta", **session.meta()})
+    try:
+        while True:
+            frame = await asyncio.to_thread(session.read_frame)
+            if frame is None:
+                break
+            await websocket.send_bytes(frame)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        session.stop()
+        websocket.app.state.mirrors.pop(device_id, None)
 
 
 @router.websocket("/ws/logcat/{device_id}")
