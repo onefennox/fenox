@@ -124,6 +124,8 @@ def tools(settings: dict | None = None) -> dict:
         "adb": {
             "client": host.adb_client(adb_path),
             "server": host.adb_server_binary(adb_path),
+            "port": adb.server_port(),
+            "detected_port": adb.current_port(),
             "candidates": host.adb_candidates(adb_path),
             "env": {key: os.environ.get(key) for key in ("ANDROID_HOME", "ANDROID_SDK_ROOT", "ANDROID_ADB_SERVER_PORT")},
         },

@@ -48,9 +48,20 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
     async def lifespan(app: FastAPI):
         app.state.store = store or Store(data_dir).load()
         app.state.auth = AuthStore(app.state.store.paths.auth)
-        if app.state.store.settings.get("adb_path"):
-            os.environ["FENOX_ADB_PATH"] = str(app.state.store.settings["adb_path"])
-        adb.configure_environment(app.state.store.settings.get("adb_port"))
+        settings = app.state.store.settings
+        if settings.get("adb_path"):
+            os.environ["FENOX_ADB_PATH"] = str(settings["adb_path"])
+        if settings.get("adb_port"):
+            os.environ["FENOX_ADB_PORT"] = str(settings["adb_port"])
+        if os.environ.get("FENOX_NO_AUTODETECT"):
+            # Tests: pin the port without probing the host.
+            adb.configure_environment(int(settings.get("adb_port") or adb.DEFAULT_SERVER_PORT))
+        else:
+            adb.configure_environment()
+            try:
+                adb.ensure_server(force=True)
+            except Exception:
+                pass
         app.state.sessions = SessionManager(app.state.store)
         app.state.mirrors = {}
         app.state.serving = {

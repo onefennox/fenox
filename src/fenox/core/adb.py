@@ -7,7 +7,6 @@ with a Python-side timeout, never through a shell.
 from __future__ import annotations
 
 import os
-import re
 import socket
 import time
 
@@ -27,8 +26,8 @@ def server_port() -> int:
 
 
 def configure_environment(port: int | None = None) -> int:
-    """Point this process and every child at the shared adb server."""
-    resolved = port or server_port()
+    """Point this process and every child at the adb server holding the devices."""
+    resolved = port or detect_port()
     os.environ["ANDROID_ADB_SERVER_PORT"] = str(resolved)
     return resolved
 
@@ -37,45 +36,89 @@ def _client() -> str | None:
     return host.adb_client()
 
 
+# The port is not assumed: it is the port whose server actually holds the
+# devices. Forcing a fixed port let a USB-blind Linux adb server squat it while
+# the user's phone sat on the Windows server's default port.
+_active_port: int | None = None
+
+
+def _is_device_line(line: str) -> bool:
+    parts = line.strip().split()
+    if len(parts) < 2 or line.strip().startswith("List"):
+        return False
+    return parts[1] in ("device", "unauthorized", "offline", "bootloader", "recovery")
+
+
+def _port_has_devices(binary: str, port: int) -> tuple[bool, bool]:
+    """(responded, has_devices) for a port, probed with the server binary."""
+    result = host.run([binary, "-P", str(port), "devices"], timeout=6)
+    text = result.stdout
+    if "List of devices" not in text:
+        return False, False
+    return True, any(_is_device_line(line) for line in text.splitlines())
+
+
+def detect_port(force: bool = False) -> int:
+    """The adb port to use: the first that has devices, else one that responds.
+
+    Checks the configured port first, then adb's default 5037, which on WSL is
+    where the Windows server (the only one that sees USB) normally lives.
+    """
+    global _active_port
+    if _active_port is not None and not force:
+        return _active_port
+    configured = server_port()
+    binary = host.adb_server_binary()
+    if binary is None:
+        _active_port = configured
+        return configured
+
+    ports: list[int] = []
+    for candidate in (configured, 5037, 5038):
+        if candidate not in ports:
+            ports.append(candidate)
+    responding: int | None = None
+    for port in ports:
+        responded, has_devices = _port_has_devices(binary, port)
+        if responded and has_devices:
+            _active_port = port
+            return port
+        if responded and responding is None:
+            responding = port
+    _active_port = responding or configured
+    return _active_port
+
+
+def current_port() -> int | None:
+    """The detected port, or None if detection has not run yet."""
+    return _active_port
+
+
 def _run(args: list[str], timeout: float = 10) -> host.Result:
     client = _client()
     if client is None:
         return host.Result(False, None, "", "adb was not found on this machine")
-    return host.run([client, "-P", str(server_port()), *args], timeout=timeout)
+    return host.run([client, "-P", str(detect_port()), *args], timeout=timeout)
 
 
-def ensure_server() -> bool:
-    """Make sure the shared adb server is listening (idempotent, silent)."""
+def ensure_server(force: bool = False) -> bool:
+    """Make sure an adb server that can see devices is running.
+
+    The port is chosen by `detect_port`, so an existing server (the Windows one
+    on WSL, which is the only one that sees USB) is reused rather than displaced.
+    """
+    global _active_port, _devices_cache
     server = host.adb_server_binary()
     if server is None:
         return False
-    port = str(server_port())
-
-    probe = host.run([server, "-P", port, "devices"], timeout=8)
-    if probe.ok and "List of devices" in probe.stdout:
+    if force:
+        _active_port = None
+    port = detect_port(force=force)
+    responded, _ = _port_has_devices(server, port)
+    if responded:
         return True
-
-    # Under WSL mirrored networking a Linux adb server may have squatted the
-    # shared port (and it cannot see USB). Evict it so Windows adb can bind.
-    if host.HOST.is_wsl or host.HOST.is_linux:
-        squat = host.run_cmd("ss -tlnp 2>/dev/null")
-        for line in squat.splitlines():
-            if f":{port} " in line and "adb" in line:
-                match = re.search(r"pid=(\d+)", line)
-                if match:
-                    try:
-                        os.kill(int(match.group(1)), 15)
-                        time.sleep(1)
-                    except (ProcessLookupError, PermissionError, ValueError):
-                        pass
-                break
-
-    if host.HOST.is_wsl:
-        host.run(["/mnt/c/Windows/System32/taskkill.exe", "/IM", "adb.exe", "/F"], timeout=8)
-        time.sleep(1)
-
-    host.run([server, "-P", port, "start-server"], timeout=10)
-    time.sleep(1)
+    host.run([server, "-P", str(port), "start-server"], timeout=10)
+    _devices_cache = {"ts": 0.0, "out": ""}
     return True
 
 
