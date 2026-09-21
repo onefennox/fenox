@@ -25,8 +25,8 @@ ported, not reinvented.
 | M2 | Projects, run + hot reload | **code complete, device verification pending** |
 | M3 | Device toolbox + phone data parity | **code complete, verification pending** |
 | M4 | In-browser mirroring | **code complete, device verification pending** |
-| M5 | Access: LAN/tunnel/TLS/PWA | **next** |
-| M6 | Onboarding and guided installs | planned |
+| M5 | Access: LAN/tunnel/TLS/PWA | **code complete, verification pending** |
+| M6 | Onboarding and guided installs | **code complete, verification pending** |
 
 ---
 
@@ -159,10 +159,13 @@ watch the terminal, hot reload / restart / stop, open DevTools.
 
 **Outcome:** reach the hub from another machine or a phone, safely.
 
-- [ ] Settings-driven reach: localhost → LAN → remote tunnel.
-- [ ] TLS for anything off localhost; token + session enforced.
-- [ ] PWA install.
-- [ ] systemd service polish and update command.
+- [x] Settings-driven reach: localhost → LAN → remote, with an explicit note that
+      a bind change needs a restart, and the URLs that become reachable.
+- [x] TLS support (flag or `FENOX_TLS_CERT`/`FENOX_TLS_KEY`) for anything off
+      localhost; the owner session and token are enforced in every tier.
+- [x] Access token shown and rotatable from Settings.
+- [x] PWA: manifest, service worker for the app shell, installable on localhost.
+- [x] `fenox service install|uninstall` and `fenox update`.
 
 ---
 
@@ -170,9 +173,12 @@ watch the terminal, hot reload / restart / stop, open DevTools.
 
 **Outcome:** a fresh machine reaches "running app" with minimal terminal use.
 
-- [ ] Detect adb, platform-tools, scrcpy, Flutter, tmux; report versions.
-- [ ] Guided installs: no-sudo tools automated, sudo tools shown with the exact command.
-- [ ] WSL/Windows-side guidance for USB.
+- [x] Detect adb, scrcpy, Flutter, tmux, ffmpeg, git, node, qrencode, zbarimg,
+      with versions and whether each is required.
+- [x] Guided installs: tools needing root return the exact command and are never
+      run by the hub; large SDKs link to their official guide.
+- [x] WSL/Windows guidance when Windows adb is missing.
+- [x] System page in the web app showing all of the above.
 
 ---
 

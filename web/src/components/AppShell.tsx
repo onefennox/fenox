@@ -9,6 +9,8 @@ const navItems = [
   { to: "/devices", label: "Devices", end: false },
   { to: "/projects", label: "Projects", end: false },
   { to: "/runs", label: "Runs", end: false },
+  { to: "/system", label: "System", end: false },
+  { to: "/settings", label: "Settings", end: false },
 ];
 
 export function AppShell() {

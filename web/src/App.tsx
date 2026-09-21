@@ -13,7 +13,9 @@ import { ProjectDetailPage } from "@/pages/ProjectDetail";
 import { ProjectsPage } from "@/pages/Projects";
 import { RunPage } from "@/pages/Run";
 import { RunsPage } from "@/pages/Runs";
+import { SettingsPage } from "@/pages/Settings";
 import { SetupPage } from "@/pages/Setup";
+import { SystemPage } from "@/pages/System";
 
 export default function App() {
   const auth = useQuery({ queryKey: keys.auth, queryFn: getAuth });
@@ -50,6 +52,8 @@ export default function App() {
         <Route path="projects/:name" element={<ProjectDetailPage />} />
         <Route path="runs" element={<RunsPage />} />
         <Route path="runs/:id" element={<RunPage />} />
+        <Route path="system" element={<SystemPage />} />
+        <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

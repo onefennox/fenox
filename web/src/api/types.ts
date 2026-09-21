@@ -173,3 +173,34 @@ export interface FileList {
   parent: string;
   entries: FileEntry[];
 }
+
+export interface Settings {
+  reach: string;
+  reach_label: string;
+  reach_levels: { id: string; label: string }[];
+  port: number;
+  remote_domain: string;
+  urls: string[];
+  notes: string[];
+  token: string | null;
+  restart_required: boolean;
+}
+
+export interface ToolCheck {
+  name: string;
+  purpose: string;
+  present: boolean;
+  version: string;
+  path: string;
+  required: boolean;
+  installable: boolean;
+  requires_sudo: boolean;
+  manual: string | null;
+}
+
+export interface DoctorReport {
+  platform: { linux: boolean; wsl: boolean; macos: boolean };
+  adb: { windows_exe: string | null; server_port: number };
+  tools: ToolCheck[];
+  notes: { tone: string; text: string }[];
+}

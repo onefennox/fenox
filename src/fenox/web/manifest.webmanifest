@@ -1,0 +1,18 @@
+{
+  "name": "Fenox",
+  "short_name": "Fenox",
+  "description": "Android device management and Flutter development, from the browser.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -9,10 +9,12 @@ import type {
   DeviceInfo,
   DeviceList,
   DiscoverResult,
+  DoctorReport,
   FileList,
   Message,
   Project,
   Run,
+  Settings,
   SystemInfo,
   Telemetry,
   Thread,
@@ -156,4 +158,17 @@ export const removeFile = (id: string, path: string) =>
 export const mirrorStatus = (id: string) =>
   api.get<{ available: boolean; reason: string; version: string | null; active: boolean }>(
     `${devicePath(id)}/mirror/status`,
+  );
+
+// -- settings and system ---------------------------------------------------
+
+export const getSettings = () => api.get<Settings>("/api/settings");
+export const updateSettings = (patch: { reach?: string; port?: number; remote_domain?: string }) =>
+  api.patch<Settings>("/api/settings", patch);
+export const rotateToken = () => api.post<{ token: string }>("/api/settings/token");
+export const getDoctor = () => api.get<DoctorReport>("/api/system/doctor");
+export const installTool = (tool: string) =>
+  api.post<{ ok: boolean; requires_sudo?: boolean; command?: string; manual?: string; note?: string; output?: string }>(
+    "/api/system/install",
+    { tool },
   );
