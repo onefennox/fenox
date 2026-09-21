@@ -23,8 +23,8 @@ ported, not reinvented.
 | M0 | Foundation: repo, core skeleton, hub, owner auth, SQLite, packaging | **done** |
 | M1 | Devices in the browser | **code complete, device verification pending** |
 | M2 | Projects, run + hot reload | **code complete, device verification pending** |
-| M3 | Device toolbox + phone data parity | **next** |
-| M4 | In-browser mirroring | planned |
+| M3 | Device toolbox + phone data parity | **code complete (files pending), verification pending** |
+| M4 | In-browser mirroring | **next** |
 | M5 | Access: LAN/tunnel/TLS/PWA | planned |
 | M6 | Onboarding and guided installs | planned |
 
@@ -115,17 +115,19 @@ watch the terminal, hot reload / restart / stop, open DevTools.
 
 **Outcome:** parity with the current CLI device screen, in the browser.
 
-- [ ] Screen: mirror launcher (M4), screenshot, record, wake, lock, type, tap, swipe, key combos, clipboard.
-- [ ] Apps: list, install APK, uninstall, clear data, force stop, info, open.
+- [x] Screen: screenshot, record, wake, lock, type, tap, swipe, key events, clipboard, open URL.
+- [x] Apps: list, install APK, uninstall, clear data, force stop, info, open.
 - [ ] Files: browse, push, pull.
-- [ ] Control: reboot, Wi-Fi/data/Bluetooth, volume, brightness, shell.
-- [ ] Logs: logcat stream over WebSocket.
-- [ ] Dev tools: device info, battery, network, storage, processes, notifications.
-- [ ] Phone data: messages, calls, contacts, calendar (port `core/phone.py` + routes + screens).
+- [x] Control: reboot, Wi-Fi/data/Bluetooth, volume, brightness, shell.
+- [x] Logs: logcat stream over WebSocket.
+- [x] Dev tools: device info, battery, storage, processes, notifications.
+- [x] Phone data: messages, calls, contacts, calendar (core/phone.py + routes + screens).
 
 ### Exit criteria
 
 - [ ] Every action available in today's CLI is available in the browser with no terminal.
+
+> File browsing is the one remaining gap; it lands next with push and pull.
 
 ---
 

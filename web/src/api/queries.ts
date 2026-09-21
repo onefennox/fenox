@@ -1,13 +1,20 @@
 import { api } from "./client";
 import type {
   AuthState,
+  Calendar,
+  CalendarEvent,
+  Call,
+  Contact,
   Device,
+  DeviceInfo,
   DeviceList,
   DiscoverResult,
+  Message,
   Project,
   Run,
   SystemInfo,
   Telemetry,
+  Thread,
 } from "./types";
 
 export const keys = {
@@ -20,6 +27,15 @@ export const keys = {
   project: (id: string) => ["project", id] as const,
   runs: ["runs"] as const,
   run: (id: string) => ["run", id] as const,
+  apps: (id: string) => ["apps", id] as const,
+  info: (id: string) => ["device-info", id] as const,
+  processes: (id: string) => ["processes", id] as const,
+  messages: (id: string) => ["messages", id] as const,
+  conversation: (id: string, thread: string) => ["messages", id, thread] as const,
+  calls: (id: string) => ["calls", id] as const,
+  contacts: (id: string) => ["contacts", id] as const,
+  calendars: (id: string) => ["calendars", id] as const,
+  events: (id: string) => ["events", id] as const,
 };
 
 export const getAuth = () => api.get<AuthState>("/api/auth/me");
@@ -57,3 +73,64 @@ export const startBatchRun = (project: string, mode: "local" | "remote") =>
   api.post<{ started: Run[]; failed: { device: string; error: string }[] }>("/api/runs/batch", { project, mode });
 export const controlRun = (id: string, action: "reload" | "restart" | "stop") =>
   api.post<{ ok: boolean }>(`/api/runs/${id}/${action}`);
+
+// -- device actions --------------------------------------------------------
+
+const devicePath = (id: string) => `/api/devices/${encodeURIComponent(id)}`;
+
+export const wakeDevice = (id: string) => api.post<{ ok: boolean }>(`${devicePath(id)}/wake`);
+export const lockDevice = (id: string) => api.post<{ ok: boolean }>(`${devicePath(id)}/lock`);
+export const sendInput = (id: string, body: Record<string, unknown>) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/input`, body);
+export const openUrl = (id: string, url: string) => api.post<{ ok: boolean }>(`${devicePath(id)}/open-url`, { url });
+export const readClipboard = (id: string) => api.get<{ clipboard: string }>(`${devicePath(id)}/clipboard`);
+export const writeClipboard = (id: string, text: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/clipboard`, { text });
+
+export const listApps = (id: string) => api.get<{ apps: string[] }>(`${devicePath(id)}/apps`);
+export const installApp = (id: string, path: string) =>
+  api.post<{ ok: boolean; detail: string }>(`${devicePath(id)}/apps/install`, { path });
+export const uninstallApp = (id: string, pkg: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/apps/${encodeURIComponent(pkg)}/uninstall`);
+export const clearApp = (id: string, pkg: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/apps/${encodeURIComponent(pkg)}/clear`);
+export const stopApp = (id: string, pkg: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/apps/${encodeURIComponent(pkg)}/stop`);
+export const launchApp = (id: string, pkg: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/apps/${encodeURIComponent(pkg)}/launch`);
+export const appInfo = (id: string, pkg: string) =>
+  api.get<{ info: string }>(`${devicePath(id)}/apps/${encodeURIComponent(pkg)}/info`);
+
+export const rebootDevice = (id: string, mode: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/reboot`, { mode });
+export const toggleService = (id: string, service: string, enabled: boolean) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/toggle`, { service, enabled });
+export const setVolume = (id: string, level: number) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/volume`, { level });
+export const setBrightness = (id: string, level: number) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/brightness`, { level });
+export const runShell = (id: string, command: string) =>
+  api.post<{ ok: boolean; output: string }>(`${devicePath(id)}/shell`, { command });
+
+export const getInfo = (id: string) => api.get<DeviceInfo>(`${devicePath(id)}/info`);
+export const getProcesses = (id: string) => api.get<{ processes: string[] }>(`${devicePath(id)}/processes`);
+export const sendNotification = (id: string, title: string, text: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/notification`, { title, text });
+export const readNotifications = (id: string) =>
+  api.get<{ notifications: string }>(`${devicePath(id)}/notifications`);
+
+// -- phone data ------------------------------------------------------------
+
+export const getThreads = (id: string, unread = false) =>
+  api.get<{ threads: Thread[] }>(`${devicePath(id)}/phone/messages?unread=${unread}`);
+export const getConversation = (id: string, threadId: string) =>
+  api.get<{ messages: Message[] }>(`${devicePath(id)}/phone/messages/${encodeURIComponent(threadId)}`);
+export const markThreadRead = (id: string, threadId: string) =>
+  api.post<{ ok: boolean }>(`${devicePath(id)}/phone/messages/${encodeURIComponent(threadId)}/read`);
+export const getCalls = (id: string, kind?: string) =>
+  api.get<{ calls: Call[] }>(`${devicePath(id)}/phone/calls${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`);
+export const getContacts = (id: string, search?: string) =>
+  api.get<{ contacts: Contact[] }>(`${devicePath(id)}/phone/contacts${search ? `?search=${encodeURIComponent(search)}` : ""}`);
+export const getCalendars = (id: string) => api.get<{ calendars: Calendar[] }>(`${devicePath(id)}/phone/calendars`);
+export const getEvents = (id: string, days = 7) =>
+  api.get<{ events: CalendarEvent[] }>(`${devicePath(id)}/phone/events?days=${days}`);

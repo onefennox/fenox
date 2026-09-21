@@ -94,3 +94,65 @@ export interface Run {
   started_at: string;
   ended_at: string | null;
 }
+
+export interface Thread {
+  thread_id: string;
+  address: string;
+  label: string;
+  date: string;
+  when: string;
+  count: string;
+  unread: number;
+  snippet: string;
+}
+
+export interface Message {
+  id: string;
+  address: string;
+  label: string;
+  when: string;
+  date: string;
+  direction: string;
+  read: boolean;
+  body: string;
+}
+
+export interface Call {
+  id: string;
+  number: string;
+  label: string;
+  when: string;
+  date: string;
+  kind: string;
+  duration: string;
+  new: boolean;
+}
+
+export interface Contact {
+  id: string;
+  name: string;
+  number: string;
+}
+
+export interface Calendar {
+  id: string;
+  name: string;
+  account: string;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  when: string;
+  begin: string;
+  end: string;
+  all_day: boolean;
+  where: string;
+  calendar_id: string;
+}
+
+export interface DeviceInfo {
+  props: Record<string, string>;
+  battery: Record<string, string>;
+  storage: string;
+}
