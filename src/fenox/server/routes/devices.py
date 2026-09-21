@@ -30,6 +30,11 @@ class PairRequest(BaseModel):
     code: str = Field(min_length=1)
 
 
+class WirelessConnectRequest(BaseModel):
+    ip: str
+    port: str
+
+
 def _view(store, alias: str, connected: list[str]) -> dict:
     info = store.device(alias) or {}
     serial = devices.live_serial(store, alias, connected)
@@ -54,16 +59,52 @@ def list_devices(request: Request) -> dict:
 
 
 @router.post("/discover")
-def discover(request: Request) -> dict:
+def discover(request: Request, mode: str = "all") -> dict:
+    """Scan for devices on one or both transports.
+
+    `usb` finds phones plugged in and emulators; `wireless` finds phones already
+    paired on this network over mDNS. `all` runs both.
+    """
+    if mode not in ("all", "usb", "wireless"):
+        raise HTTPException(status_code=422, detail="mode must be all, usb or wireless")
     store = request.app.state.store
-    added = devices.autodetect(store)
-    wireless_added, pending = devices.autodetect_wireless(store, force=True)
+    added: list[str] = []
+    pending: list[tuple[str, str]] = []
+    if mode in ("all", "usb"):
+        added += devices.autodetect(store)
+    if mode in ("all", "wireless"):
+        wireless_added, pending = devices.autodetect_wireless(store, force=True)
+        added += wireless_added
     connected = adb.connected_ids()
     return {
-        "added": added + wireless_added,
+        "added": added,
         "pending": [{"ip": ip, "port": port} for ip, port in pending],
         "devices": [_view(store, alias, connected) for alias in store.devices()],
     }
+
+
+@router.post("/connect-wireless")
+def connect_wireless(request: Request, body: WirelessConnectRequest) -> dict:
+    """Connect a phone by address once it is paired (or if it accepts directly)."""
+    store = request.app.state.store
+    ok, result = adb.connect(body.ip, body.port)
+    if not ok:
+        raise HTTPException(status_code=409, detail=result or "could not connect")
+
+    existing = next((alias for alias, info in store.devices().items() if info.get("ip") == body.ip), None)
+    if existing:
+        info = store.device(existing) or {}
+        info["port"] = str(body.port)
+        store.upsert_device(existing, info)
+        return _view(store, existing, adb.connected_ids())
+
+    model = adb.getprop(f"{body.ip}:{body.port}", "ro.product.model") or "Android device"
+    base = model.replace(" ", "").replace("_", "").lower() or "phone"
+    name, n = base, 2
+    while store.device(name) is not None:
+        name, n = f"{base}{n}", n + 1
+    store.upsert_device(name, {"type": "wireless", "ip": body.ip, "model": model, "port": str(body.port)})
+    return _view(store, name, adb.connected_ids())
 
 
 @router.get("/{device_id}")

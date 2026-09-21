@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { Cable, Wifi } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import {
   connectDevice,
+  connectWireless,
   deleteDevice,
   discoverDevices,
   keys,
@@ -14,19 +16,54 @@ import {
 import type { Device } from "@/api/types";
 import { Badge, Button, Card, ErrorText, Field, Input, Modal, Spinner, StatusDot } from "@/components/ui";
 
+function Steps({ items }: { items: string[] }) {
+  return (
+    <ol className="list-decimal space-y-1 pl-5 text-sm text-[var(--color-muted)]">
+      {items.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+    </ol>
+  );
+}
+
+function ConnectCard({
+  icon,
+  title,
+  subtitle,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  subtitle: string;
+  children: ReactNode;
+}) {
+  return (
+    <Card className="flex flex-col gap-3 p-5">
+      <div className="flex items-center gap-2">
+        <span className="text-[var(--color-accent)]">{icon}</span>
+        <h2 className="text-sm font-semibold text-white">{title}</h2>
+      </div>
+      <p className="text-xs text-[var(--color-muted)]">{subtitle}</p>
+      {children}
+    </Card>
+  );
+}
+
 export function DevicesPage() {
   const queryClient = useQueryClient();
   const { data, isLoading, error } = useQuery({ queryKey: keys.devices, queryFn: listDevices });
 
+  const [pairOpen, setPairOpen] = useState(false);
+  const [addressOpen, setAddressOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Device | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [removeTarget, setRemoveTarget] = useState<Device | null>(null);
-  const [pairOpen, setPairOpen] = useState(false);
   const [pair, setPair] = useState({ ip: "", port: "", code: "" });
+  const [address, setAddress] = useState({ ip: "", port: "" });
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: keys.devices });
-
-  const discover = useMutation({ mutationFn: discoverDevices, onSuccess: refresh });
+  const scanUsb = useMutation({ mutationFn: () => discoverDevices("usb"), onSuccess: refresh });
+  const findWireless = useMutation({ mutationFn: () => discoverDevices("wireless"), onSuccess: refresh });
   const connect = useMutation({ mutationFn: connectDevice, onSuccess: refresh });
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: Partial<Device> & { name?: string } }) => updateDevice(id, patch),
@@ -38,7 +75,15 @@ export function DevicesPage() {
     onSuccess: () => {
       setPairOpen(false);
       setPair({ ip: "", port: "", code: "" });
-      discover.mutate();
+      findWireless.mutate();
+    },
+  });
+  const doConnect = useMutation({
+    mutationFn: () => connectWireless(address.ip.trim(), address.port.trim()),
+    onSuccess: () => {
+      setAddressOpen(false);
+      setAddress({ ip: "", port: "" });
+      refresh();
     },
   });
 
@@ -51,33 +96,87 @@ export function DevicesPage() {
 
   const devices = data?.devices ?? [];
   const pending = data?.pending ?? [];
+  const unauthorized = pending.filter((item) => item.state === "unauthorized");
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-white">Devices</h1>
-          <p className="mt-1 text-sm text-[var(--color-muted)]">Connect, organize, and monitor your Android devices.</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => discover.mutate()} disabled={discover.isPending}>
-            {discover.isPending ? "Searching…" : "Discover"}
-          </Button>
-          <Button onClick={() => setPairOpen(true)}>Pair device</Button>
-        </div>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-lg font-semibold text-white">Devices</h1>
+        <p className="mt-1 text-sm text-[var(--color-muted)]">
+          Connect a phone over USB or wireless debugging. Everything else happens in the browser.
+        </p>
       </div>
 
-      {discover.data && discover.data.added.length > 0 ? (
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <ConnectCard
+          icon={<Cable size={18} />}
+          title="USB debugging"
+          subtitle="The most reliable connection. Best while setting up a new phone."
+        >
+          <Steps
+            items={[
+              "On the phone, enable Developer options (tap Build number seven times).",
+              "Turn on USB debugging in Developer options.",
+              "Plug the phone in and accept the “Allow USB debugging?” prompt.",
+            ]}
+          />
+          <div className="mt-auto flex items-center gap-3 pt-2">
+            <Button onClick={() => scanUsb.mutate()} disabled={scanUsb.isPending}>
+              {scanUsb.isPending ? "Scanning…" : "Scan for USB devices"}
+            </Button>
+            {unauthorized.length > 0 ? (
+              <span className="text-xs text-amber-300">Waiting on the phone&apos;s prompt</span>
+            ) : null}
+          </div>
+        </ConnectCard>
+
+        <ConnectCard
+          icon={<Wifi size={18} />}
+          title="Wireless debugging"
+          subtitle="No cable. The phone and this machine must be on the same network."
+        >
+          <Steps
+            items={[
+              "On the phone, turn on Wireless debugging in Developer options.",
+              "For a phone that has never been paired, tap “Pair device with pairing code”.",
+              "After pairing, Fenox finds it on the network automatically.",
+            ]}
+          />
+          <div className="mt-auto flex flex-wrap gap-2 pt-2">
+            <Button onClick={() => findWireless.mutate()} disabled={findWireless.isPending}>
+              {findWireless.isPending ? "Searching…" : "Find phones on network"}
+            </Button>
+            <Button variant="secondary" onClick={() => setPairOpen(true)}>
+              Pair a new phone
+            </Button>
+            <Button variant="ghost" onClick={() => setAddressOpen(true)}>
+              Connect by address
+            </Button>
+          </div>
+        </ConnectCard>
+      </div>
+
+      {scanUsb.data && scanUsb.data.added.length > 0 ? (
         <Card className="border-emerald-500/30 p-3 text-sm text-emerald-300">
-          Added {discover.data.added.join(", ")}.
+          Added {scanUsb.data.added.join(", ")}.
+        </Card>
+      ) : null}
+      {findWireless.data && findWireless.data.added.length > 0 ? (
+        <Card className="border-emerald-500/30 p-3 text-sm text-emerald-300">
+          Connected {findWireless.data.added.join(", ")}.
+        </Card>
+      ) : null}
+      {findWireless.data && findWireless.data.pending.length > 0 ? (
+        <Card className="border-amber-500/30 p-3 text-sm text-amber-300">
+          Found {findWireless.data.pending.map((item) => item.ip).join(", ")} but not paired yet. Use “Pair a new phone”.
         </Card>
       ) : null}
 
-      {pending.length > 0 ? (
+      {unauthorized.length > 0 ? (
         <Card className="border-amber-500/30 p-3 text-sm text-amber-300">
-          {pending.map((item) => (
+          {unauthorized.map((item) => (
             <div key={item.id}>
-              {item.id}: {item.state === "unauthorized" ? "waiting for the debugging prompt" : "offline"}
+              {item.id} is waiting for authorization — accept the “Allow USB debugging?” prompt on the phone.
             </div>
           ))}
         </Card>
@@ -85,7 +184,7 @@ export function DevicesPage() {
 
       {devices.length === 0 ? (
         <Card className="p-8 text-center text-sm text-[var(--color-muted)]">
-          No devices yet. Plug in a phone with USB debugging on, or use Discover for devices already on your network.
+          No devices yet. Use one of the two methods above to connect a phone.
         </Card>
       ) : (
         <Card className="divide-y divide-[var(--color-border)]">
@@ -97,7 +196,7 @@ export function DevicesPage() {
                   <Link to={`/devices/${encodeURIComponent(device.id)}`} className="truncate font-medium text-white hover:underline">
                     {device.id}
                   </Link>
-                  <Badge>{device.type ?? "unknown"}</Badge>
+                  <Badge>{device.type === "wireless" ? "wireless" : device.type === "usb" ? "usb" : device.type ?? "unknown"}</Badge>
                   {device.disabled ? <Badge tone="warn">disabled</Badge> : null}
                 </div>
                 <div className="truncate text-xs text-[var(--color-muted)]">
@@ -121,10 +220,7 @@ export function DevicesPage() {
                 >
                   Rename
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => update.mutate({ id: device.id, patch: { disabled: !device.disabled } })}
-                >
+                <Button variant="ghost" onClick={() => update.mutate({ id: device.id, patch: { disabled: !device.disabled } })}>
                   {device.disabled ? "Enable" : "Disable"}
                 </Button>
                 <Button variant="ghost" onClick={() => setRemoveTarget(device)}>
@@ -138,6 +234,73 @@ export function DevicesPage() {
 
       {(update.error || connect.error) ? (
         <ErrorText>{((update.error ?? connect.error) as Error).message}</ErrorText>
+      ) : null}
+
+      {pairOpen ? (
+        <Modal title="Pair over wireless debugging" onClose={() => setPairOpen(false)}>
+          <form
+            className="space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              doPair.mutate();
+            }}
+          >
+            <p className="text-sm text-[var(--color-muted)]">
+              On the phone: Developer options → Wireless debugging → <strong className="text-white">Pair device with pairing code</strong>.
+              This shows an IP address, a pairing port, and a six-digit code. Pairing is done once per network.
+            </p>
+            <Field label="IP address">
+              <Input value={pair.ip} onChange={(event) => setPair({ ...pair, ip: event.target.value })} placeholder="192.168.1.20" />
+            </Field>
+            <Field label="Pairing port">
+              <Input value={pair.port} onChange={(event) => setPair({ ...pair, port: event.target.value })} placeholder="41234" />
+            </Field>
+            <Field label="Six-digit code">
+              <Input value={pair.code} onChange={(event) => setPair({ ...pair, code: event.target.value })} placeholder="123456" />
+            </Field>
+            <ErrorText>{(doPair.error as Error | null)?.message}</ErrorText>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setPairOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={doPair.isPending || !pair.ip || !pair.port || !pair.code}>
+                Pair
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+
+      {addressOpen ? (
+        <Modal title="Connect by address" onClose={() => setAddressOpen(false)}>
+          <form
+            className="space-y-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              doConnect.mutate();
+            }}
+          >
+            <p className="text-sm text-[var(--color-muted)]">
+              Use the <strong className="text-white">IP address and port on the main Wireless debugging screen</strong> (not the
+              pairing port). Useful when mDNS discovery is blocked on your network.
+            </p>
+            <Field label="IP address">
+              <Input value={address.ip} onChange={(event) => setAddress({ ...address, ip: event.target.value })} placeholder="192.168.1.20" />
+            </Field>
+            <Field label="Connection port">
+              <Input value={address.port} onChange={(event) => setAddress({ ...address, port: event.target.value })} placeholder="37001" />
+            </Field>
+            <ErrorText>{(doConnect.error as Error | null)?.message}</ErrorText>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setAddressOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={doConnect.isPending || !address.ip || !address.port}>
+                Connect
+              </Button>
+            </div>
+          </form>
+        </Modal>
       ) : null}
 
       {renameTarget ? (
@@ -173,8 +336,8 @@ export function DevicesPage() {
       {removeTarget ? (
         <Modal title="Remove device" onClose={() => setRemoveTarget(null)}>
           <p className="text-sm text-[var(--color-muted)]">
-            Remove <span className="text-white">{removeTarget.id}</span> from Fenox? This does not unpair the phone; you
-            can Discover it again.
+            Remove <span className="text-white">{removeTarget.id}</span> from Fenox? This does not unpair the phone; you can
+            connect it again.
           </p>
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setRemoveTarget(null)}>
@@ -188,40 +351,6 @@ export function DevicesPage() {
               Remove
             </Button>
           </div>
-        </Modal>
-      ) : null}
-
-      {pairOpen ? (
-        <Modal title="Pair over wireless debugging" onClose={() => setPairOpen(false)}>
-          <form
-            className="space-y-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              doPair.mutate();
-            }}
-          >
-            <p className="text-sm text-[var(--color-muted)]">
-              On the phone, open Developer options, then Wireless debugging, then Pair device with pairing code.
-            </p>
-            <Field label="IP address">
-              <Input value={pair.ip} onChange={(event) => setPair({ ...pair, ip: event.target.value })} placeholder="192.168.1.20" />
-            </Field>
-            <Field label="Pairing port">
-              <Input value={pair.port} onChange={(event) => setPair({ ...pair, port: event.target.value })} placeholder="41234" />
-            </Field>
-            <Field label="Pairing code">
-              <Input value={pair.code} onChange={(event) => setPair({ ...pair, code: event.target.value })} placeholder="123456" />
-            </Field>
-            <ErrorText>{(doPair.error as Error | null)?.message}</ErrorText>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setPairOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={doPair.isPending || !pair.ip || !pair.port || !pair.code}>
-                Pair
-              </Button>
-            </div>
-          </form>
         </Modal>
       ) : null}
     </div>

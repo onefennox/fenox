@@ -50,7 +50,10 @@ export const logout = () => api.post<AuthState>("/api/auth/logout");
 export const getSystem = () => api.get<SystemInfo>("/api/system");
 
 export const listDevices = () => api.get<DeviceList>("/api/devices");
-export const discoverDevices = () => api.post<DiscoverResult>("/api/devices/discover");
+export const discoverDevices = (mode: "all" | "usb" | "wireless" = "all") =>
+  api.post<DiscoverResult>(`/api/devices/discover?mode=${mode}`);
+export const connectWireless = (ip: string, port: string) =>
+  api.post<Device>("/api/devices/connect-wireless", { ip, port });
 export const connectDevice = (id: string) => api.post<Device>(`/api/devices/${id}/connect`);
 export const pairDevice = (ip: string, port: string, code: string) =>
   api.post<{ paired: boolean; detail: string }>("/api/devices/pair", { ip, port, code });

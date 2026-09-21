@@ -100,6 +100,43 @@ def test_connect_reports_unreachable(tmp_path, monkeypatch):
         client.__exit__(None, None, None)
 
 
+def test_discover_runs_only_the_requested_transport(tmp_path, monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(devices, "autodetect", lambda store: calls.append("usb") or [])
+    monkeypatch.setattr(devices, "autodetect_wireless", lambda store, force=False: (calls.append("wireless"), ([], []))[1])
+    client = _client(tmp_path)
+    try:
+        client.post("/api/devices/discover?mode=usb")
+        assert calls == ["usb"]
+        calls.clear()
+        client.post("/api/devices/discover?mode=wireless")
+        assert calls == ["wireless"]
+        calls.clear()
+        client.post("/api/devices/discover?mode=all")
+        assert set(calls) == {"usb", "wireless"}
+        assert client.post("/api/devices/discover?mode=nonsense").status_code == 422
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_connect_wireless_registers_the_phone(tmp_path, monkeypatch):
+    monkeypatch.setattr(adb, "connect", lambda ip, port: (True, "connected"))
+    monkeypatch.setattr(adb, "getprop", lambda serial, prop, timeout=4: "Pixel 7")
+    monkeypatch.setattr(adb, "connected_ids", lambda: ["192.168.1.20:37001"])
+    client = _client(tmp_path)
+    try:
+        device = client.post("/api/devices/connect-wireless", json={"ip": "192.168.1.20", "port": "37001"}).json()
+        assert device["id"] == "pixel7"
+        assert device["type"] == "wireless"
+        assert device["online"] is True
+        assert client.app.state.store.device("pixel7")["ip"] == "192.168.1.20"
+
+        monkeypatch.setattr(adb, "connect", lambda ip, port: (False, "failed to connect"))
+        assert client.post("/api/devices/connect-wireless", json={"ip": "10.0.0.9", "port": "5"}).status_code == 409
+    finally:
+        client.__exit__(None, None, None)
+
+
 def test_empty_registry_lists_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(adb, "connected_ids", lambda: [])
     client = _client(tmp_path)
