@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { getProject, keys, listDevices, startBatchRun, startRun, updateProject } from "@/api/queries";
 import type { Project } from "@/api/types";
+import { PathField } from "@/components/FolderPicker";
 import { Badge, Button, Card, ErrorText, Field, Input, Modal, Spinner } from "@/components/ui";
 
 export function ProjectDetailPage() {
@@ -46,6 +47,10 @@ export function ProjectDetailPage() {
       setEditOpen(false);
       queryClient.invalidateQueries({ queryKey: keys.project(projectId) });
     },
+  });
+  const urls = useMutation({
+    mutationFn: (patch: { api_local?: string; api_remote?: string }) => updateProject(projectId, patch),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.project(projectId) }),
   });
 
   if (project.isLoading) {
@@ -108,17 +113,31 @@ export function ProjectDetailPage() {
       </Card>
 
       <Card className="p-5">
+        <h2 className="mb-1 text-sm font-semibold text-white">Backend URLs</h2>
+        <p className="mb-4 text-xs text-[var(--color-muted)]">
+          Used by <span className="text-white">local</span> and{" "}
+          <span className="text-white">production</span> runs respectively. Change them here rather than
+          editing the project.
+        </p>
+        <BackendUrls
+          local={entry.api_local}
+          production={entry.api_remote ?? ""}
+          saving={urls.isPending}
+          error={(urls.error as Error | null)?.message}
+          onSave={(patch) => urls.mutate(patch)}
+        />
+      </Card>
+
+      <Card className="p-5">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-white">Configuration</h2>
           <Button variant="ghost" onClick={() => setEditOpen(true)}>
-            Edit
+            Edit project
           </Button>
         </div>
         <dl className="grid grid-cols-1 gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
           <ConfigRow label="Port" value={entry.port} />
           <ConfigRow label="Package" value={entry.package ?? "—"} />
-          <ConfigRow label="Local API" value={entry.api_local} />
-          <ConfigRow label="Remote API" value={entry.api_remote ?? "—"} />
           <ConfigRow label="Local socket" value={entry.socket_local ?? "—"} />
           <ConfigRow label="Remote socket" value={entry.socket_remote ?? "—"} />
           <ConfigRow label="Backend" value={entry.backend ? `${entry.backend.cmd} (${entry.backend.path})` : "—"} />
@@ -139,8 +158,75 @@ export function ProjectDetailPage() {
   );
 }
 
-function ConfigRow({ label, value }: { label: string; value: string }) {
+/**
+ * The two backend URLs, editable in place.
+ *
+ * These are the fields that change most often and that a wrong value breaks
+ * silently — a run against the wrong backend just fails to load data. They get
+ * their own panel on the page rather than living behind a dialog, so they are
+ * somewhere to go when a run points at the wrong place.
+ */
+function BackendUrls({
+  local,
+  production,
+  saving,
+  error,
+  onSave,
+}: {
+  local: string;
+  production: string;
+  saving: boolean;
+  error?: string;
+  onSave: (patch: { api_local?: string; api_remote?: string }) => void;
+}) {
+  const [values, setValues] = useState({ api_local: local, api_remote: production });
+
+  // Follow the server when it changes elsewhere, without stomping on typing.
+  useEffect(() => {
+    setValues({ api_local: local, api_remote: production });
+  }, [local, production]);
+
+  const dirty = values.api_local !== local || values.api_remote !== production;
+
   return (
+    <form
+      className="space-y-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave({
+          api_local: values.api_local.trim(),
+          api_remote: values.api_remote.trim(),
+        });
+      }}
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Local backend URL">
+          <Input
+            value={values.api_local}
+            onChange={(event) => setValues({ ...values, api_local: event.target.value })}
+            placeholder="http://localhost:1991/api"
+          />
+        </Field>
+        <Field label="Production backend URL">
+          <Input
+            value={values.api_remote}
+            onChange={(event) => setValues({ ...values, api_remote: event.target.value })}
+            placeholder="https://api.example.com"
+          />
+        </Field>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button type="submit" disabled={saving || !dirty}>
+          {saving ? "Saving…" : "Save URLs"}
+        </Button>
+        {dirty ? <span className="text-xs text-[var(--color-muted)]">Unsaved changes</span> : null}
+      </div>
+      <ErrorText>{error}</ErrorText>
+    </form>
+  );
+}
+
+function ConfigRow({ label, value }: { label: string; value: string }) {  return (
     <div className="flex justify-between border-b border-[var(--color-border)] py-1.5">
       <dt className="text-[var(--color-muted)]">{label}</dt>
       <dd className="truncate pl-4 text-right text-white">{value}</dd>
@@ -155,43 +241,49 @@ function EditProjectModal({
   onClose,
   onSave,
 }: {
-  initial: { port: string; api_local: string; api_remote?: string; socket_local?: string; socket_remote?: string };
+  initial: {
+    path: string;
+    port: string;
+    socket_local?: string;
+    socket_remote?: string;
+    backend?: { path: string; cmd: string };
+  };
   saving: boolean;
   error?: string;
   onClose: () => void;
-  onSave: (patch: Partial<Project>) => void;
+  onSave: (patch: Partial<Project> & { backend_path?: string }) => void;
 }) {
   const [form, setForm] = useState({
+    path: initial.path,
     port: initial.port,
-    api_local: initial.api_local,
-    api_remote: initial.api_remote ?? "",
     socket_local: initial.socket_local ?? "",
     socket_remote: initial.socket_remote ?? "",
+    backend_path: initial.backend?.path ?? "",
   });
 
   return (
-    <Modal title="Edit project" onClose={onClose}>
+    <Modal title="Edit project" onClose={onClose} wide>
       <form
         className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           onSave({
+            path: form.path,
             port: form.port,
-            api_local: form.api_local,
-            api_remote: form.api_remote,
             socket_local: form.socket_local,
             socket_remote: form.socket_remote,
+            backend_path: form.backend_path,
           });
         }}
       >
+        <PathField
+          label="Project folder"
+          value={form.path}
+          onChange={(path) => setForm({ ...form, path })}
+          browseTitle="Choose the Flutter project folder"
+        />
         <Field label="Port">
           <Input value={form.port} onChange={(event) => setForm({ ...form, port: event.target.value })} />
-        </Field>
-        <Field label="Local API URL">
-          <Input value={form.api_local} onChange={(event) => setForm({ ...form, api_local: event.target.value })} />
-        </Field>
-        <Field label="Remote API URL">
-          <Input value={form.api_remote} onChange={(event) => setForm({ ...form, api_remote: event.target.value })} />
         </Field>
         <Field label="Local socket URL">
           <Input value={form.socket_local} onChange={(event) => setForm({ ...form, socket_local: event.target.value })} />
@@ -199,6 +291,13 @@ function EditProjectModal({
         <Field label="Remote socket URL">
           <Input value={form.socket_remote} onChange={(event) => setForm({ ...form, socket_remote: event.target.value })} />
         </Field>
+        <PathField
+          label="Backend folder"
+          value={form.backend_path}
+          onChange={(backend_path) => setForm({ ...form, backend_path })}
+          placeholder="Detected from the project"
+          browseTitle="Choose the backend folder"
+        />
         <ErrorText>{error}</ErrorText>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose}>

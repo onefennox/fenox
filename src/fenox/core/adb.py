@@ -7,6 +7,7 @@ with a Python-side timeout, never through a shell.
 from __future__ import annotations
 
 import os
+import re
 import socket
 import time
 
@@ -101,6 +102,39 @@ def _run(args: list[str], timeout: float = 10) -> host.Result:
     return host.run([client, "-P", str(detect_port()), *args], timeout=timeout)
 
 
+_version_cache: str | None = None
+
+
+def invalidate_version_cache() -> None:
+    """Forget the cached release, so the next call re-asks the machine."""
+    global _version_cache
+    _version_cache = None
+
+
+def client_version() -> str:
+    """The adb *release* as a string, e.g. "36.0.0".
+
+    Not the protocol version: `adb version` prints two numbers, and the first
+    ("Android Debug Bridge version 1.0.41") has been frozen for years. The
+    release is the "Version 36.0.0-13206524" line, which is the number that
+    decides which wireless features exist. Cached: it cannot change while the
+    hub runs. Returns "" when adb cannot be run.
+    """
+    global _version_cache
+    if _version_cache is not None:
+        return _version_cache
+    result = _run(["version"], timeout=10)
+    # Prefer the "Version x.y.z" line; fall back to the last dotted number.
+    match = re.search(r"^Version\s+(\d+\.\d+\.\d+)", result.stdout or "", re.MULTILINE)
+    if not match:
+        found = re.findall(r"\d+\.\d+\.\d+", result.stdout or "")
+        match = None
+        _version_cache = found[-1] if found else ""
+    else:
+        _version_cache = match.group(1)
+    return _version_cache
+
+
 def ensure_server(force: bool = False) -> bool:
     """Make sure an adb server that can see devices is running.
 
@@ -169,27 +203,80 @@ def connect(ip: str, port: str | int) -> tuple[bool, str]:
 
 
 def mdns_port(ip: str) -> str | None:
-    for line in _run(["mdns", "services"], timeout=6).stdout.splitlines():
-        if ip in line and "_adb-tls-connect" in line:
-            parts = line.split()
-            if len(parts) >= 3 and ":" in parts[2]:
-                return parts[2].split(":")[1]
+    for service in mdns_services():
+        if service["kind"] == "connect" and service["ip"] == ip:
+            return service["port"]
     return None
+
+
+# The three mDNS services a phone can advertise. `_adb-tls-pairing` is the one
+# that matters most and is the one usually missed: a phone publishes it only
+# while the "Pair device with pairing code" dialog is open, which is precisely
+# when the owner is looking at the code and needs to be told where to type it.
+_MDNS_KINDS = (
+    ("_adb-tls-pairing", "pairing"),
+    ("_adb-tls-connect", "connect"),
+    ("_adb._tcp", "legacy"),
+)
+
+
+def _parse_mdns_address(token: str) -> tuple[str, str] | None:
+    """`192.168.1.20:37895` -> ('192.168.1.20', '37895'), or None."""
+    if ":" not in token:
+        return None
+    host, _, port = token.rpartition(":")
+    if not port.isdigit() or not host:
+        return None
+    return (host.strip("[]"), port)
+
+
+def mdns_services() -> list[dict[str, str]]:
+    """Phones advertising wireless debugging, as adb's mDNS broker sees them.
+
+    Returns [{"kind": pairing|connect|legacy, "ip": ..., "port": ...,
+    "name": ...}].
+
+    The listing is "<instance> <service type> <address>", but the columns are
+    located by content rather than position: usbipd-era adb builds and the IPv6
+    form add or reorder columns, and an address is the only field that looks
+    like `host:port`. A phone may advertise both IPv4 and IPv6; IPv4 is kept,
+    because it is the form that works across NAT and WSL alike.
+    """
+    found: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for line in _run(["mdns", "services"], timeout=8).stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        # Most specific first: "_adb-tls-connect" is a substring of nothing else,
+        # but "_adb._tcp" would otherwise match the legacy service inside the
+        # fully-qualified name of a TLS service.
+        kind = next((name for token, name in _MDNS_KINDS if token in line), "")
+        if not kind:
+            continue
+        instance = next((part for part in parts if part.startswith("adb-") or part.startswith("studio-")), parts[0])
+        for token in parts:
+            address = _parse_mdns_address(token)
+            if not address:
+                continue
+            ip, port = address
+            key = (kind, ip, port)
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append({"kind": kind, "ip": ip, "port": port, "name": instance})
+            break  # one address per service is enough
+    return found
 
 
 def mdns_candidates() -> list[tuple[str, str]]:
     """[(ip, port)] phones advertising wireless debugging."""
-    found = []
-    for line in _run(["mdns", "services"], timeout=6).stdout.splitlines():
-        if "_adb-tls-connect" not in line:
-            continue
-        parts = line.split()
-        addr = parts[2] if len(parts) >= 3 else ""
-        if ":" in addr:
-            ip, port = addr.rsplit(":", 1)
-            if ip and port.isdigit():
-                found.append((ip, port))
-    return found
+    return [(service["ip"], service["port"]) for service in mdns_services() if service["kind"] == "connect"]
+
+
+def mdns_pairing_candidates() -> list[dict[str, str]]:
+    """Phones currently showing a pairing code and waiting to be paired."""
+    return [service for service in mdns_services() if service["kind"] == "pairing"]
 
 
 def pair(ip: str, port: str | int, code: str) -> tuple[bool, str]:

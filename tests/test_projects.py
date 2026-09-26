@@ -75,3 +75,56 @@ def test_project_routes_crud_and_scan(tmp_path):
         assert "demo" in scanned["added"]
     finally:
         client.__exit__(None, None, None)
+
+
+def test_suggest_name_prefers_the_repo_over_a_generic_folder(tmp_path):
+    repo = tmp_path / "Paylesa"
+    app = _flutter_project(repo / "frontend", "mobile-app")
+    (repo / ".git").mkdir()
+
+    assert projects.suggest_name(str(app)) == "paylesa"
+
+
+def test_suggest_name_uses_the_folder_when_there_is_no_repo(tmp_path):
+    project = _flutter_project(tmp_path, "demo")
+
+    assert projects.suggest_name(str(project)) == "demo"
+
+
+def test_suggest_name_never_returns_a_taken_name(tmp_path):
+    project = _flutter_project(tmp_path, "demo")
+
+    assert projects.suggest_name(str(project), {"demo", "demo2"}) == "demo3"
+
+
+def test_create_derives_the_name_from_the_folder(tmp_path):
+    project = _flutter_project(tmp_path, "demo")
+    client = _client(tmp_path)
+    try:
+        created = client.post("/api/projects", json={"path": str(project)})
+        assert created.status_code == 201
+        assert created.json()["id"] == "demo"
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_create_accepts_urls_in_the_same_pass(tmp_path):
+    project = _flutter_project(tmp_path, "demo")
+    client = _client(tmp_path)
+    try:
+        created = client.post(
+            "/api/projects",
+            json={
+                "path": str(project),
+                "port": "1991",
+                "api_local": "http://localhost:1991",
+                "api_remote": "https://api.paylesa.com",
+            },
+        )
+        assert created.status_code == 201
+        entry = created.json()["project"]
+        assert entry["port"] == "1991"
+        assert entry["api_local"] == "http://localhost:1991"
+        assert entry["api_remote"] == "https://api.paylesa.com"
+    finally:
+        client.__exit__(None, None, None)

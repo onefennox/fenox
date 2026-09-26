@@ -5,12 +5,41 @@ on:
     branches: [main]
   pull_request:
 
+# Lint and types are platform-independent, so they run once rather than in every
+# matrix cell. Tests run on all three, because the whole point of the diagnosis
+# engine is that it is right about *other people's* machines: the platform
+# branches in `core/host.py` and the recorded fixtures in `tests/test_connect.py`
+# are exactly the code that cannot be verified from one platform.
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src tests
+      - name: Type check
+        run: mypy
+
+  test:
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.11", "3.12"]
+        exclude:
+          # Keep the matrix small enough to be useful: the oldest supported
+          # Python is only exercised on the reference platform.
+          - os: macos-latest
+            python-version: "3.11"
+          - os: windows-latest
+            python-version: "3.11"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,11 +51,51 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
 
-      - name: Lint
-        run: ruff check src tests
-
-      - name: Type check
-        run: mypy
-
       - name: Test
         run: pytest -q
+
+  # The diagnosis engine must never claim a machine is healthy when it is not.
+  # That regression is invisible to unit tests, so the built report is checked
+  # on a runner that genuinely has no adb and no Flutter installed.
+  doctor-on-a-bare-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e .
+      - name: The report must not claim health on a machine with nothing installed
+        run: |
+          set +e
+          python -m fenox doctor > report.txt
+          status=$?
+          set -e
+          cat report.txt
+          # Non-zero exit: adb is required and is genuinely absent here.
+          if [ "$status" -eq 0 ]; then
+            echo "::error::doctor exited 0 on a runner with no adb — it is claiming health it cannot know"
+            exit 1
+          fi
+          # And it must name the missing tool rather than shrug.
+          grep -q "adb" report.txt || { echo "::error::report does not mention adb"; exit 1; }
+      - name: The report must be valid JSON
+        run: python -m fenox doctor --json | python -c "import json,sys; json.load(sys.stdin)"
+
+  # Every artifact the installer ships has to at least build.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]" build
+      - name: Build the distribution
+        run: python -m build
+      - name: The launcher must at least start and print its version
+        run: fenox --version

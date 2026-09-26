@@ -73,20 +73,33 @@ export function Spinner({ label }: { label?: string }) {
   );
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({
+  title,
+  onClose,
+  children,
+  wide = false,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  /** Wider panel for content that needs the room, such as the folder picker. */
+  wide?: boolean;
+}) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5"
+        className={`flex max-h-[85vh] w-full flex-col rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)] p-5 ${
+          wide ? "max-w-3xl" : "max-w-md"
+        }`}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex shrink-0 items-center justify-between">
           <h2 className="text-base font-semibold text-white">{title}</h2>
           <button className="cursor-pointer text-[var(--color-muted)] hover:text-white" onClick={onClose} aria-label="Close">
             &times;
           </button>
         </div>
-        {children}
+        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
       </div>
     </div>
   );

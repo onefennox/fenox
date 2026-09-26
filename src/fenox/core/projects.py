@@ -196,6 +196,23 @@ def iter_flutter_projects(base: str, max_depth: int = 3):
             yield root
 
 
+def suggest_name(path: str, existing: set[str] | None = None) -> str:
+    """A free, human name for the project at `path`.
+
+    Same preference as `name_for_project` — a generic folder like `mobile-app`
+    inside a repo is named after the repo — but never returns a name that is
+    already taken, so registration can derive the name from the folder alone.
+    """
+    taken = existing or set()
+    name = name_for_project(path, set()) or sanitize_name(os.path.basename(os.path.abspath(path)))
+    if not name:
+        name = "project"
+    candidate, n = name, 2
+    while candidate in taken:
+        candidate, n = f"{name}{n}", n + 1
+    return candidate
+
+
 def name_for_project(path: str, existing: set[str]) -> str | None:
     repo = repo_root(path)
     base_dir = os.path.basename(path)

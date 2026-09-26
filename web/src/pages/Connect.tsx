@@ -13,6 +13,7 @@ import {
   pairDevice,
 } from "@/api/queries";
 import type { Device } from "@/api/types";
+import { ConnectionPanel, PairingPrompt } from "@/components/ConnectionPanel";
 import { Badge, Button, Card, ErrorText, Field, Input, Spinner, StatusDot } from "@/components/ui";
 
 type Method = "usb" | "wireless";
@@ -30,7 +31,7 @@ function Steps({ items }: { items: string[] }) {
 export function ConnectPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [method, setMethod] = useState<Method>("usb");
+  const [method, setMethod] = useState<Method>("wireless");
   const [pair, setPair] = useState({ ip: "", port: "", code: "" });
   const [address, setAddress] = useState({ ip: "", port: "" });
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -70,7 +71,6 @@ export function ConnectPage() {
     }
     return null;
   })();
-
   const rows = all.length + unauthorized.length + discoveredUnpaired.length;
 
   return (
@@ -78,9 +78,14 @@ export function ConnectPage() {
       <div>
         <h1 className="text-lg font-semibold text-white">Connect a device</h1>
         <p className="mt-1 text-sm text-[var(--color-muted)]">
-          Connect an Android phone over USB or wireless debugging. Fenox finds it and keeps it up to date.
+          Connect an Android phone over wireless or USB debugging. Fenox finds it and keeps it up to date.
         </p>
       </div>
+
+      {/* Ahead of the instructions: a phone that is plugged in but unreachable
+          looks exactly like no phone, so the reason has to come first. */}
+      <ConnectionPanel />
+      <PairingPrompt />
 
       <Card className="space-y-5 p-5">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -95,7 +100,7 @@ export function ConnectPage() {
             <Cable size={18} />
             <span>
               <span className="block font-medium">USB debugging</span>
-              <span className="text-xs text-[var(--color-muted)]">Most reliable; good for setup</span>
+              <span className="text-xs text-[var(--color-muted)]">Needs a cable; on WSL also a USB bridge</span>
             </span>
           </button>
           <button
@@ -109,7 +114,7 @@ export function ConnectPage() {
             <Wifi size={18} />
             <span>
               <span className="block font-medium">Wireless debugging</span>
-              <span className="text-xs text-[var(--color-muted)]">No cable; same network</span>
+              <span className="text-xs text-[var(--color-muted)]">Nothing to install — works the same everywhere</span>
             </span>
           </button>
         </div>

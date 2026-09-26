@@ -8,6 +8,9 @@ import type {
   Device,
   DeviceInfo,
   DeviceList,
+  ConnectionFinding,
+  ConnectionReport,
+  DirListing,
   DiscoverResult,
   DoctorReport,
   FileList,
@@ -27,6 +30,8 @@ export const keys = {
   device: (id: string) => ["device", id] as const,
   telemetry: (id: string) => ["telemetry", id] as const,
   system: ["system"] as const,
+  connection: ["connection"] as const,
+  browse: (path?: string) => ["browse", path ?? "~"] as const,
   projects: ["projects"] as const,
   project: (id: string) => ["project", id] as const,
   runs: ["runs"] as const,
@@ -65,12 +70,19 @@ export const getTelemetry = (id: string) => api.get<{ telemetry: Telemetry }>(`/
 
 export const listProjects = () => api.get<{ projects: Record<string, Project> }>("/api/projects");
 export const getProject = (id: string) => api.get<{ id: string; project: Project }>(`/api/projects/${id}`);
-export const createProject = (payload: { name: string; path: string; update?: boolean }) =>
-  api.post<{ id: string; project: Project }>("/api/projects", payload);
+export const createProject = (payload: {
+  name?: string;
+  path: string;
+  port?: string;
+  api_local?: string;
+  api_remote?: string;
+  update?: boolean;
+}) => api.post<{ id: string; project: Project }>("/api/projects", payload);
 export const updateProject = (id: string, patch: Partial<Project>) =>
   api.patch<{ id: string; project: Project }>(`/api/projects/${id}`, patch);
 export const deleteProject = (id: string) => api.delete<void>(`/api/projects/${id}`);
-export const scanProjects = () => api.post<{ added: string[]; projects: Record<string, Project> }>("/api/projects/scan");
+export const scanProjects = (path?: string) =>
+  api.post<{ added: string[]; projects: Record<string, Project> }>("/api/projects/scan", path ? { path } : {});
 
 export const listRuns = () => api.get<{ runs: Run[] }>("/api/runs");
 export const getRun = (id: string) => api.get<Run>(`/api/runs/${id}`);
@@ -193,11 +205,23 @@ export const updateSettings = (patch: {
   remote_domain?: string;
   flutter_path?: string;
   adb_path?: string;
+  projects_dir?: string;
 }) =>
   api.patch<Settings>("/api/settings", patch);
 export const rotateToken = () => api.post<{ token: string }>("/api/settings/token");
 export const getDoctor = () => api.get<DoctorReport>("/api/system/doctor");
-export const installTool = (tool: string) =>
+export const browseDirs = (path?: string) =>
+  api.get<DirListing>(`/api/system/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`);
+export const getConnection = () => api.get<ConnectionReport>("/api/system/connection");
+export const repairConnection = (id: string) =>
+  api.post<{
+    id: string;
+    ok: boolean;
+    state: "resolved" | "escalated" | "unchanged" | "blocked";
+    detail: string;
+    remaining: ConnectionFinding[];
+    blocking: ConnectionFinding[];
+  }>("/api/system/connection/repair", { id });export const installTool = (tool: string) =>
   api.post<{ ok: boolean; requires_sudo?: boolean; command?: string; manual?: string; note?: string; output?: string }>(
     "/api/system/install",
     { tool },

@@ -48,7 +48,7 @@ core, for power users and scripts. The browser is the product.
 | --- | --- |
 | Product name | **Fenox** |
 | Repo / org | `onefenox/fenox` |
-| Install | GitHub → one curl command, or Docker, or from source |
+| Install | GitHub → one curl command, `uv tool`, `pipx`, or from a checkout |
 | Runtime | one process, one port |
 | Platform | Linux + WSL (matches today's product); macOS/Windows out of scope for v1 |
 
@@ -59,15 +59,74 @@ Install paths (mirrors how OmniRoute is distributed):
   dir, installs a launcher on `PATH`, optionally installs the systemd user service.
 - **systemd `--user`** — `systemctl --user enable --now fenox` keeps the hub alive
   across reboots.
-- **Docker** — `docker run -p 8787:8787 ...` for a headless server/remote host.
-- **From source** — `git clone && ./scripts/dev.sh` for contributors.
+- **`uv tool install` / `pipx install`** — the shortest path for anyone who
+  already uses either, and it keeps Fenox isolated from system Python.
+- **From source** — `git clone && bash packaging/install.sh` for contributors.
+
+**No container image, deliberately.** Fenox's whole purpose is to reach the host:
+the adb server on `127.0.0.1:5037`, the nodes under `/dev/bus/usb`, and the
+Flutter SDK that builds the apps. On WSL it also depends on the `usbipd` bridge,
+which lives on the Windows side of the machine and is unreachable from a Linux
+container. A container would need `--network=host`, `--device=/dev/bus/usb` and a
+mounted SDK merely to see one phone, and would still be blind to the WSL case.
+It would also undermine `fenox doctor`, whose value is inspecting the real
+machine. Tools that only proxy HTTP can be containerised and gain nothing by it.
+Remote access is a **reach** setting with TLS, not a container.
 - **PWA** — the dashboard is installable to a home screen (later phase).
+
+## 4a. Connecting a device, honestly
+
+The product promise is that connecting a phone needs no terminal. That is true,
+with one documented exception, and the exception is worth stating plainly rather
+than discovering later.
+
+| Path | What the owner has to do |
+| --- | --- |
+| **Wireless debugging** (Android 11+) | Turn it on in Developer options and enter a six-digit code **once per phone per machine**. Nothing is installed on the computer. |
+| **USB on Linux / macOS / Windows** | Plug it in. The OS exposes the device to adb directly. |
+| **USB on WSL2** | One-time, per machine: install `usbipd-win` (needs administrator). After that Fenox attaches and re-attaches by itself. |
+
+**Why WSL is different.** WSL has no USB passthrough, and Microsoft does not
+implement one — USB support in WSL is entirely third-party (`usbipd-win`). Two
+properties of that bridge dictate the design:
+
+- `usbipd bind` **persists** across reboots but needs **administrator** rights.
+- `usbipd attach --wsl` needs **no** rights but is **not persistent**: it must be
+  redone after every reboot, device reset, or unplug/replug.
+
+So the recurring part is automatable and the one-time part is not. Fenox performs
+every `attach` itself, on a timer, so replugs and reboots are uneventful; and it
+reports the single `bind` command when a device has never been shared. It never
+runs anything that would raise a UAC prompt on the owner's desktop.
+
+**Wireless is the default** for exactly this reason: it is the only path with no
+host setup at all, on any platform.
+
+**Auto-connect is a platform feature, not something Fenox fakes.** adb
+auto-connects any device whose GUID it has paired, whenever that device publishes
+`_adb-tls-connect`. On Platform Tools 37 / Android 17 ("ADB Wi-Fi 2.0") the network
+itself is remembered as trusted, so a paired phone reconnects by itself after
+sleep, a reboot, or a change of network. Fenox detects the adb release and says so
+when an upgrade would remove work rather than pretending the current setup is
+equivalent.
+
+**Pairing is discovered, not typed.** A phone publishes `_adb-tls-pairing` only
+while its "Pair device with pairing code" dialog is open — precisely when the
+owner is looking at the code. Fenox watches for it and offers the address
+pre-filled, so the IP and port are never typed. `adb mdns services` is the
+mechanism, and it needs mDNS to work on the network; where it is filtered, the
+manual fields remain as a fallback.
+
+**Silence is a bug.** A phone that is plugged in, authorised and healthy but not
+bridged into WSL is indistinguishable from no phone at all. Fenox therefore
+reports *findings* — what is wrong, why, and the one command that fixes it —
+rather than a bare "0 devices", on the Connect page and in the hub log alike.
 
 ## 5. Runtime model
 
 ```
 fenox                 # start the hub, open the dashboard in a browser
-fenox serve           # start the hub headless (no browser), for services/Docker
+fenox serve           # start the hub headless (no browser), for services
 fenox --version       # fast, no server, no adb
 fenox <subcommand>    # management/ops from the terminal (see below)
 ```
@@ -75,7 +134,7 @@ fenox <subcommand>    # management/ops from the terminal (see below)
 - The hub serves the REST API, the WebSocket endpoints, and the built SPA from
   **one process on one port** (default `8787`).
 - Starting the hub does **not** block the CLI: it runs in the foreground and
-  stops on Ctrl+C; under systemd/Docker it runs as a service.
+  stops on Ctrl+C; under systemd it runs as a service.
 - `fenox` (no args) starts the hub and opens `http://localhost:8787`.
 
 **The terminal is the management surface; the web is the product.** The CLI covers
@@ -98,13 +157,13 @@ and already exists and is tested.
 | Web framework | FastAPI + uvicorn (ASGI) |
 | Realtime | Native WebSocket over uvicorn |
 | Database | **SQLite** via the standard-library `sqlite3`, with numbered migrations |
-| Frontend | React + TypeScript + Vite (SPA), Tailwind CSS |
-| Server state / UI state | TanStack Query / Zustand |
+| Frontend | React 19 + TypeScript + Vite (SPA), Tailwind CSS 4 |
+| Server state | TanStack Query (Zustand was specified but is not used) |
 | Terminal | xterm.js (web) |
-| Mirroring client | `@yume-chan/scrcpy` + WebCodecs (video/audio/control) |
+| Mirroring client | Native `<video>` + Media Source Extensions; `ffmpeg` remuxes on the hub (§10a) |
 | CLI | argparse + Rich (management surface) |
 | Quality | pytest, Ruff, mypy, coverage gate; Playwright for web end-to-end |
-| Packaging | curl installer, systemd `--user`, Docker; PWA later |
+| Packaging | curl installer, `uv`/`pipx`, systemd `--user`/`--system`; PWA later |
 
 Layering is strict: `core` has no web framework, no argparse and no terminal UI.
 `server` and `cli` are independent adapters over `core`.
@@ -145,32 +204,39 @@ fenox/
   src/fenox/
     __init__.py
     __main__.py
+    version.py
     core/
-      config.py      # data dir, config schema, atomic save, migration
-      host.py        # platform/WSL, adb.exe, output dirs, run_cmd
-      adb.py         # shared server, device list, connect, pair, mdns, reverse
-      devices.py     # registry, telemetry, autodetect, watcher, health
-      projects.py    # project CRUD, scan, port/URL/package detection, groups
-      flutter.py     # flutter binary, build, install, open, run args
-      sessions.py    # run supervisor: pty, pid-file, signals, streams, history
-      phone.py       # content providers: messages, calls, contacts, calendar
-      mirror.py      # scrcpy-server proxy (video/audio/control)
-      doctor.py      # environment checks + guided tool installs
-      auth.py        # single-owner credential + sessions
+      config.py       # data dir, config schema, atomic save, migration
+      db.py           # SQLite (WAL) + numbered migrations
+      host.py         # platform/WSL, adb.exe, output dirs, run_cmd
+      adb.py          # shared server, device list, connect, pair, mdns, reverse
+      devices.py      # registry, telemetry, autodetect, watcher, health
+      projects.py     # project CRUD, scan, port/URL/package detection, groups
+      flutter.py      # flutter binary, build, install, open, run args
+      sessions.py     # run supervisor: pty, pid-file, signals, streams, history
+      session_io.py   # pty transcript read/write helpers for sessions
+      toolbox.py      # screen input, apps, power, clipboard, notifications
+      files.py        # device file browse / push / pull / mkdir / delete
+      phone.py        # content providers: messages, calls, contacts, calendar
+      mirror.py       # scrcpy-server -> adb reverse -> ffmpeg fMP4 (§10a)
+      scrcpy_server.py  # pin/provision the scrcpy-server jar
+      access.py       # reach tiers: localhost / LAN / remote, TLS
+      doctor.py       # environment checks + guided tool installs
+      auth.py         # single-owner credential + sessions
     server/
-      app.py         # FastAPI app factory, lifespan, static mount
-      routes/        # system.py, devices.py, projects.py, runs.py, settings.py, auth.py
-      ws.py          # /ws/events, /ws/runs/{id}
-      security.py    # auth middleware, CSRF, token, bind/reach rules
+      app.py          # FastAPI app factory, lifespan, static mount
+      routes/         # system, devices, projects, runs, settings, auth,
+                      #   phone, files, mirror, toolbox
+      ws.py           # /ws/events, /ws/runs/{id}
+      security.py     # auth middleware, CSRF, token, bind/reach rules
     cli/
-      main.py        # argparse + dispatch (ported)
-      tui/           # the terminal dashboard (ported)
+      main.py         # argparse + dispatch
+    web/              # built SPA (generated from ../web — do not edit)
   web/               # React + TS + Vite SPA (own package.json)
   tests/
   packaging/
     install.sh
     fenox.service
-    Dockerfile
     uninstall.sh
   scripts/
     dev.sh
@@ -200,6 +266,51 @@ Each module exposes plain Python functions/classes. Illustrative, not final.
 **`devices`**
 - `register/rename/enable/disable/remove`, `telemetry(serial)`, `telemetry_many()`,
   `autodetect()`, `autodetect_wireless()`, `check_and_connect(alias)`, `DeviceWatcher`.
+
+**`env`** — every fact about the machine, answered once
+- `tool(name, settings) -> Tool`, `tools()`, `invalidate()`, `adb_topology()`,
+  `shell()`, `fix_runs_in()`, `summary()`.
+- The single owner of tool resolution and version parsing. This exists because
+  two copies of the adb version parser existed and the product answered the same
+  question two ways — the doctor reporting the frozen protocol string
+  `1.0.41` while the connection layer reported the real release `36.0.0`. Probes
+  are cached, because the dashboard asks often and each one may run a subprocess.
+
+**`report`** — the shareable diagnosis artefact
+- `build(settings, store) -> dict`, `render(report) -> str`, `redact(text)`.
+- Assembled as data, not printed inline, so the terminal, `--json` and a future
+  web view are three renderings of one answer and can be tested.
+- Redaction is the default: home directories, Windows account names, device
+  serials and IP addresses are masked, because these reports get pasted into
+  forums. `--full` disables it for reading locally. Secrets are never included.
+- `fenox doctor` exits non-zero only for findings that actually block a device,
+  so advice (an out-of-date adb) never reads as a broken machine.
+
+**`connect`** — why a device is not reachable, and what to do about it
+- `diagnose() -> [Finding]`, `repair(finding)`, `repair_usbipd()`.
+- A `Finding` is `{id, severity, title, detail, fix, auto, scope, also, runs_in}`.
+  `id` is the **problem** (`usbipd.stale_export`), never the instance, so
+  consumers can rely on it; `scope` says which device. `runs_in` is `"windows"`
+  when the fix has to be pasted into a Windows PowerShell even though the user is
+  looking at a bash prompt.
+- Diagnosis is strictly read-only. It reports what previous attach attempts
+  recorded rather than trying an attach to find out.
+- Identifiers are **problem keys**, so the same key means the same thing on every
+  platform: `adb.missing`, `adb.too_old`, `usbipd.missing`, `usbipd.unbound`,
+  `usbipd.not_attached`, `usbipd.stale_export`, `device.unauthorized`,
+  `device.stale_adb_entry`.
+- `device.stale_adb_entry` exists because the obvious reflex — restarting the adb
+  server — disconnects every device and, on WSL, takes the USB attachment down
+  with it. The finding says so explicitly.
+- An unfixable-by-us failure is logged **once**, not on every poll; repeats drop
+  to debug. A tool people leave running must not fill its own console.
+
+**`usbipd`** (WSL only) — the USB/IP bridge, and the whole of Fenox's knowledge of it
+- `installed()`, `version()`, `list_devices() -> [UsbipdDevice]`, `android_devices()`,
+  `find_device(busid)`, `attach(busid)`, `detach(busid)`, and the command builders
+  `bind_command` / `attach_command` / `unbind_command` / `install_command`.
+- `bind` needs administrator rights and is therefore only ever *returned* as a
+  command for the owner. `attach` needs none, and is done by Fenox.
 
 **`projects`**
 - `add/update/remove/scan`, `detect_port()`, `detect_backend()`, `package_name()`,
@@ -316,6 +427,9 @@ POST /api/runs {project, device, mode}
 
 ## 10. Mirroring (M-late, but fully in scope)
 
+> **Superseded by implementation.** The design below is the original WebCodecs
+> plan. The shipped design is recorded in §10a.
+
 - The hub runs the **unmodified scrcpy-server** matching the installed scrcpy,
   pushed to the device and started over adb — no forked protocol.
 - The hub sets up `adb forward`, opens the video/audio/control sockets, and
@@ -325,6 +439,35 @@ POST /api/runs {project, device, mode}
 - scrcpy-server version is pinned and verified at connect time.
 - **Note:** the dev machine currently has **scrcpy 1.25**; audio forwarding needs
   scrcpy ≥ 2.0. Phase 5 either upgrades scrcpy or ships video+control first.
+
+## 10a. Mirroring — as built
+
+An earlier WebRTC design (`scrcpy H.264 → ffmpeg → MediaMTX`) was tried and
+abandoned. The shipped pipeline is deliberately simpler and has no extra ports
+and no negotiation:
+
+```
+device H.264 (Annex B, untouched)
+   → adb reverse: device connects back to the hub's listening socket
+   → ffmpeg: remux only, to fragmented MP4
+   → hub WebSocket (the same one the app already uses)
+   → browser Media Source Extensions
+   → native <video> element
+```
+
+- **The hub never decodes video**, and never transcodes — ffmpeg only remuxes.
+  The device's hardware H.264 reaches the browser byte-for-byte.
+- The reverse tunnel is the one the scrcpy server expects: the hub listens, maps
+  the device's abstract socket to it with `adb reverse`, and the server connects
+  back.
+- **No WebRTC, no MediaMTX, no second port.** The mirror works wherever the app
+  itself works, including behind a reverse proxy on a LAN.
+- `@yume-chan/scrcpy` and `scrcpy-decoder-webcodecs` are **not** dependencies.
+  Input does not travel the video socket: it reuses the toolbox action paths, so
+  one code path drives the device whether or not mirroring is active.
+- Fragments are emitted on a timer rather than only at keyframes, so latency does
+  not depend on the phone producing frequent keyframes.
+- **Audio is still open** and needs scrcpy ≥ 2.0; the installed server is 1.25.
 
 ## 11. Authentication & security
 
@@ -361,8 +504,8 @@ POST /api/runs {project, device, mode}
 ## 13. Frontend
 
 React + TypeScript + Vite + Tailwind (shadcn/ui). TanStack Query for server state,
-Zustand for UI state, **xterm.js** for the run terminal and logcat,
-**`@yume-chan/scrcpy`** for mirroring.
+**xterm.js** for the run terminal and logcat. The mirror plays in a native
+`<video>` fed by Media Source Extensions (see §10a).
 
 Pages:
 
@@ -418,7 +561,8 @@ The built SPA is bundled and served by the hub, so there is one artefact.
 - Product is **server-first**: one process, one port; browser is the front door.
 - **Single owner** login; no registration, no user management.
 - Frontend: **React + TS + Vite + Tailwind + xterm.js**.
-- Distribution: **curl installer + systemd --user + Docker**, PWA later.
+- Distribution: **curl installer + `uv`/`pipx` + systemd (`--user` or `--system`)**,
+  no container image, PWA later.
 - Storage: **XDG data dir + env config**, migrate `~/.fenox.json`.
 - Reach: localhost default; LAN/remote explicit, same login, TLS required off-localhost.
 

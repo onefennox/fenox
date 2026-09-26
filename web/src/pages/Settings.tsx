@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { getSettings, getTools, rotateToken, updateSettings } from "@/api/queries";
+import { PathField } from "@/components/FolderPicker";
 import { Button, Card, ErrorText, Field, Input, Spinner } from "@/components/ui";
 
 export function SettingsPage() {
@@ -14,6 +15,7 @@ export function SettingsPage() {
     remote_domain: "",
     flutter_path: "",
     adb_path: "",
+    projects_dir: "",
   });
   const [token, setToken] = useState<string | null>(null);
 
@@ -25,6 +27,7 @@ export function SettingsPage() {
         remote_domain: settings.data.remote_domain,
         flutter_path: settings.data.flutter_path,
         adb_path: settings.data.adb_path,
+        projects_dir: settings.data.projects_dir,
       });
       setToken(settings.data.token);
     }
@@ -38,6 +41,7 @@ export function SettingsPage() {
         remote_domain: form.remote_domain,
         flutter_path: form.flutter_path,
         adb_path: form.adb_path,
+        projects_dir: form.projects_dir,
       }),
     onSuccess: (data) => {
       setToken(data.token);
@@ -133,13 +137,13 @@ export function SettingsPage() {
           </div>
         ) : null}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Flutter path override">
-            <Input
-              value={form.flutter_path}
-              onChange={(event) => setForm({ ...form, flutter_path: event.target.value })}
-              placeholder={tools.data?.flutter.path ?? "/home/you/flutter"}
-            />
-          </Field>
+          <PathField
+            label="Flutter path override"
+            value={form.flutter_path}
+            onChange={(flutter_path) => setForm({ ...form, flutter_path })}
+            placeholder={tools.data?.flutter.path ?? "/home/you/flutter"}
+            browseTitle="Choose the Flutter SDK folder"
+          />
           <Field label="adb path override">
             <Input
               value={form.adb_path}
@@ -148,6 +152,13 @@ export function SettingsPage() {
             />
           </Field>
         </div>
+        <PathField
+          label="Projects folder"
+          value={form.projects_dir}
+          onChange={(projects_dir) => setForm({ ...form, projects_dir })}
+          placeholder="~/Projects"
+          browseTitle="Choose the projects folder"
+        />
         <p className="text-xs text-[var(--color-muted)]">
           Leave blank to detect automatically. A Flutter path may be the SDK directory or the binary itself.
         </p>

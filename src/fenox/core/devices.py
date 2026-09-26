@@ -11,8 +11,11 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import adb
+from . import adb, connect
 from .host import run_cmd
+from .log import get_logger
+
+log = get_logger("devices")
 
 TELEMETRY_TTL = 15
 _WIRELESS_SCAN = {"ts": 0.0}
@@ -284,8 +287,12 @@ class DeviceWatcher:
                 if self.announce and (added or wireless_added):
                     self.announce(added + wireless_added)
                 reconnect_known_wireless(self.store)
-            except Exception:
-                pass
+                # USB on WSL is bridged by usbipd, and those attachments do not
+                # survive a reboot or a replug. Re-establish them here so the
+                # owner never has to run a command for it.
+                connect.repair_usbipd()
+            except Exception as exc:  # a watcher must not die on one bad poll
+                log.warning("device poll failed: %s", exc, exc_info=True)
 
     def stop(self) -> None:
         self._stop.set()

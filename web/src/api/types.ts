@@ -174,6 +174,32 @@ export interface FileList {
   entries: FileEntry[];
 }
 
+/** One subdirectory offered by the host folder picker. */
+export interface HostDir {
+  name: string;
+  path: string;
+  /** True when this directory is a Flutter app root (pubspec.yaml + android/). */
+  flutter: boolean;
+}
+
+export interface DirQuick {
+  label: string;
+  path: string;
+}
+
+/** A directory listing of the host machine, for choosing a folder. */
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  dirs: HostDir[];
+  truncated: boolean;
+  /** True when the listed directory is itself a Flutter app root. */
+  flutter: boolean;
+  /** A project name derived from this folder; present for Flutter app roots. */
+  suggested_name?: string;
+  quick: DirQuick[];
+}
+
 export interface Settings {
   reach: string;
   reach_label: string;
@@ -182,6 +208,7 @@ export interface Settings {
   remote_domain: string;
   flutter_path: string;
   adb_path: string;
+  projects_dir: string;
   urls: string[];
   notes: string[];
   token: string | null;
@@ -212,4 +239,35 @@ export interface ToolsReport {
   adb: { client: string | null; server: string | null; candidates: string[]; env: Record<string, string | null> };
   flutter: { path: string | null; candidates: string[]; env: Record<string, string | null> };
   scrcpy: { binary: string | null; version: string | null; server: string | null };
+}
+
+/** One connection problem, with the remedy attached. */
+export interface ConnectionFinding {
+  id: string;
+  severity: "error" | "warn" | "info";
+  title: string;
+  detail: string;
+  /** The exact command that fixes it, when a command is what is needed. */
+  fix: string | null;
+  /** True when Fenox can run `fix` itself, without administrator rights. */
+  auto: boolean;
+  scope: string | null;
+  /** Further steps to run after `fix`, in order. */
+  also: string[];
+  /** Where the commands have to be run when that is not the current shell. */
+  runs_in: "here" | "windows";
+}
+
+export interface MdnsService {
+  kind: "pairing" | "connect" | "legacy";
+  ip: string;
+  port: string;
+  name: string;
+}
+
+export interface ConnectionReport {
+  findings: ConnectionFinding[];
+  wireless: { pairing: MdnsService[]; connect: MdnsService[] };
+  usbipd: { relevant: boolean; installed: boolean; version: string };
+  adb_version: string;
 }

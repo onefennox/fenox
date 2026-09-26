@@ -13,7 +13,7 @@ from ..security import require_owner
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depends(require_owner)])
 
-EDITABLE = ("reach", "port", "remote_domain", "flutter_path", "adb_path")
+EDITABLE = ("reach", "port", "remote_domain", "flutter_path", "adb_path", "projects_dir")
 
 
 class SettingsUpdate(BaseModel):
@@ -22,6 +22,7 @@ class SettingsUpdate(BaseModel):
     remote_domain: str | None = None
     flutter_path: str | None = None
     adb_path: str | None = None
+    projects_dir: str | None = None
 
 
 def _view(request: Request) -> dict:
@@ -40,6 +41,7 @@ def _view(request: Request) -> dict:
         "remote_domain": settings.get("remote_domain") or "",
         "flutter_path": settings.get("flutter_path") or "",
         "adb_path": settings.get("adb_path") or "",
+        "projects_dir": settings.get("projects_dir") or "",
         "urls": access.urls(reach, port),
         "notes": access.notes(reach),
         "token": request.app.state.auth.token(),
@@ -69,6 +71,8 @@ def update_settings(request: Request, body: SettingsUpdate) -> dict:
         store.settings["flutter_path"] = body.flutter_path.strip()
     if body.adb_path is not None:
         store.settings["adb_path"] = body.adb_path.strip()
+    if body.projects_dir is not None:
+        store.settings["projects_dir"] = body.projects_dir.strip()
     return _view(request)
 
 

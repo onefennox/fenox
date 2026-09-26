@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=68"]
+# 77+ for PEP 639 licence expressions, so builds are metadata-correct and warning-free.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +8,8 @@ name = "fenox"
 description = "Single-user, self-hosted web app for Android devices and Flutter development"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "onefennox" }]
 dynamic = ["version"]
 dependencies = [

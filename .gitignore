@@ -23,6 +23,21 @@ web/.vite/
 .env.*
 !.env.example
 
+# TLS material must never be committed. Fenox's own certificates belong in the
+# data directory ($FENOX_DATA_DIR), not in the repository: a cert committed by
+# accident is a credential published to everyone who clones the project.
+*.crt
+*.key
+*.pem
+*.p12
+*.jks
+
+# Build and coverage output
+.coverage
+.coverage.*
+htmlcov/
+dist/
+
 # Editors / OS
 .DS_Store
 .idea/

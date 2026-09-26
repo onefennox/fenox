@@ -130,18 +130,43 @@ _ANDROID_SDK_ROOTS = [
     "~/Android/sdk",
     "~/Library/Android/sdk",
     "~/Library/Android/Sdk",
+    # Windows, where the SDK lands under LOCALAPPDATA and adb carries an
+    # extension. Probed on every platform because a Windows SDK can be mounted
+    # or shared, and an unreadable candidate is simply skipped.
+    "~\\AppData\\Local\\Android\\Sdk",
+    "~\\Android\\Sdk",
     "/usr/lib/android-sdk",
     "/opt/android-sdk",
     "/opt/android/sdk",
+    # Homebrew, on both Intel and Apple Silicon. Missing these meant a Mac with
+    # only `brew install android-platform-tools` looked like it had no adb.
+    "/opt/homebrew/share/android-commandlinetools",
+    "/usr/local/share/android-commandlinetools",
 ]
+
+#: Binaries that carry a platform extension. Probed in both forms so a
+#: cross-platform candidate list still resolves on the machine running it.
+_ADB_NAMES = ("adb", "adb.exe")
+_FLUTTER_NAMES = ("flutter", "flutter.bat")
+
+
+def _first_existing(paths: list[str]) -> str | None:
+    for path in paths:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
 
 
 def android_sdk_roots() -> list[str]:
     roots: list[str] = []
-    for variable in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+    for variable in ("ANDROID_HOME", "ANDROID_SDK_ROOT", "LOCALAPPDATA"):
         value = os.environ.get(variable)
         if value:
             roots.append(os.path.expanduser(value))
+    # LOCALAPPDATA is a parent, not the SDK root itself.
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        roots.append(os.path.join(os.path.expanduser(local), "Android", "Sdk"))
     roots += [os.path.expanduser(root) for root in _ANDROID_SDK_ROOTS]
     seen: list[str] = []
     for root in roots:
@@ -154,7 +179,9 @@ def adb_candidates(configured: str | None = None) -> list[str]:
     """Every plausible adb binary, in preference order, deduplicated.
 
     On WSL the Windows adb.exe is the only one that can see USB, so it is
-    included alongside the Linux adb used as a client.
+    included alongside the Linux adb used as a client. Both the bare name and
+    the platform's executable suffix are probed: a list built on Linux has to
+    stay useful when the same code runs on Windows or macOS.
     """
     seen: list[str] = []
 
@@ -163,27 +190,51 @@ def adb_candidates(configured: str | None = None) -> list[str]:
         if expanded not in seen:
             seen.append(expanded)
 
+    def add_names(directory: str) -> None:
+        for name in _ADB_NAMES:
+            add(os.path.join(directory, name))
+
     if configured:
         expanded = os.path.expanduser(configured)
-        add(os.path.join(expanded, "adb") if os.path.isdir(expanded) else expanded)
-    for variable in ("FENOX_ADB_PATH",):
-        value = os.environ.get(variable)
-        if value:
-            add(value)
-    found = shutil.which("adb")
+        if os.path.isdir(expanded):
+            add_names(expanded)
+            add_names(os.path.join(expanded, "platform-tools"))
+        else:
+            add(expanded)
+    value = os.environ.get("FENOX_ADB_PATH")
+    if value:
+        add(value)
+    found = shutil.which("adb") or shutil.which("adb.exe")
     if found:
         add(found)
     for root in android_sdk_roots():
-        add(os.path.join(root, "platform-tools", "adb"))
-    for path in ("~/platform-tools/adb", "/opt/platform-tools/adb", "/usr/local/platform-tools/adb",
-                 "/snap/bin/adb", "/home/linuxbrew/.linuxbrew/bin/adb"):
-        add(path)
+        add_names(os.path.join(root, "platform-tools"))
+    for path in ("~/platform-tools", "/opt/platform-tools", "/usr/local/platform-tools",
+                 "/snap/bin", "/home/linuxbrew/.linuxbrew/bin", "/opt/homebrew/bin", "/usr/local/bin"):
+        if os.path.basename(path) in _ADB_NAMES:
+            add(path)
+        else:
+            add_names(path)
     if WINDOWS_ADB:
         add(WINDOWS_ADB)
     # The Windows SDK location, mapped into WSL, when the distro name is known.
     if HOST.is_wsl and WIN_USER:
         add(f"/mnt/c/Users/{WIN_USER}/AppData/Local/Android/Sdk/platform-tools/adb.exe")
     return seen
+
+
+def adb_installations() -> list[str]:
+    """Every adb on this machine that actually exists, for conflict detection.
+
+    Two adbs of different versions will fight over the same device, and the
+    symptom — a phone that connects then vanishes — points nowhere near the
+    cause. Surfacing the set is the only way to explain it.
+    """
+    found: list[str] = []
+    for candidate in adb_candidates():
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK) and candidate not in found:
+            found.append(candidate)
+    return found
 
 
 def adb_client(configured: str | None = None) -> str | None:
@@ -210,19 +261,33 @@ ADB_EXE = adb_server_binary() or "/mnt/c/platform-tools/adb.exe"
 # --- Flutter resolution ----------------------------------------------------
 
 FLUTTER_CANDIDATES = [
-    "~/flutter/bin/flutter",
-    "~/development/flutter/bin/flutter",
-    "~/.flutter-sdk/flutter/bin/flutter",
-    "~/.local/share/flutter/bin/flutter",
-    "~/fvm/default/bin/flutter",
-    "~/.fvm/default/bin/flutter",
-    "~/.asdf/shims/flutter",
-    "/opt/flutter/bin/flutter",
-    "/usr/local/flutter/bin/flutter",
-    "/usr/lib/flutter/bin/flutter",
-    "/snap/bin/flutter",
-    "/home/linuxbrew/.linuxbrew/bin/flutter",
+    "~/flutter",
+    "~/development/flutter",
+    "~/.flutter-sdk/flutter",
+    "~/.local/share/flutter",
+    "~/fvm/default",
+    "~/.fvm/default",
+    "/opt/flutter",
+    "/usr/local/flutter",
+    "/usr/lib/flutter",
+    "/snap/flutter",
+    # Homebrew, Intel and Apple Silicon.
+    "/opt/homebrew/share/flutter",
+    "/usr/local/share/flutter",
+    "/home/linuxbrew/.linuxbrew/share/flutter",
+    "~\\flutter",
+    "~\\development\\flutter",
+    "C:\\src\\flutter",
 ]
+
+
+def _flutter_binary_in(root: str) -> list[str]:
+    """The flutter launcher inside an SDK root, in every name it can have.
+
+    Windows ships `flutter.bat`, not `flutter`, so a path list that only ever
+    mentions the POSIX name silently finds nothing there.
+    """
+    return [os.path.join(root, "bin", name) for name in _FLUTTER_NAMES]
 
 
 def flutter_candidates(configured: str | None = None, project: str | None = None) -> list[str]:
@@ -241,33 +306,42 @@ def flutter_candidates(configured: str | None = None, project: str | None = None
     if project:
         root = os.path.expanduser(project)
         # FVM keeps a per-project SDK, and may record it in .fvmrc / .fvm/fvm_config.json.
-        add(os.path.join(root, ".fvm", "flutter_sdk", "bin", "flutter"))
-        add(os.path.join(root, ".fvm", "flutter", "bin", "flutter"))
+        for name in _FLUTTER_NAMES:
+            add(os.path.join(root, ".fvm", "flutter_sdk", "bin", name))
+            add(os.path.join(root, ".fvm", "flutter", "bin", name))
         rc = os.path.join(root, ".fvmrc")
         try:
             if os.path.isfile(rc):
                 import json as _json
                 version = _json.loads(Path(rc).read_text()).get("flutter")
                 if version:
-                    add(os.path.join(Path.home(), "fvm", "versions", version, "bin", "flutter"))
+                    for name in _FLUTTER_NAMES:
+                        add(os.path.join(Path.home(), "fvm", "versions", version, "bin", name))
         except Exception:
             pass
     if configured:
         expanded = os.path.expanduser(configured)
         # Accept either the binary or its directory.
         if os.path.isdir(expanded):
-            add(os.path.join(expanded, "bin", "flutter"))
-            add(os.path.join(expanded, "flutter", "bin", "flutter"))
+            for name in _FLUTTER_NAMES:
+                add(os.path.join(expanded, "bin", name))
+                add(os.path.join(expanded, "flutter", "bin", name))
         else:
             add(expanded)
     root_env = os.environ.get("FLUTTER_ROOT")
     if root_env:
-        add(os.path.join(root_env, "bin", "flutter"))
-    found = shutil.which("flutter")
-    if found:
-        add(found)
-    for candidate in FLUTTER_CANDIDATES:
-        add(candidate)
+        for name in _FLUTTER_NAMES:
+            add(os.path.join(root_env, "bin", name))
+    for launcher in _FLUTTER_NAMES:
+        found = shutil.which(launcher)
+        if found:
+            add(found)
+    # asdf shims sit on PATH under their plain name.
+    add(os.path.expanduser("~/.asdf/shims/flutter"))
+    # Each candidate is an SDK root, so expand it to its launcher(s).
+    for root in FLUTTER_CANDIDATES:
+        for path in _flutter_binary_in(os.path.expanduser(root)):
+            add(path)
     return seen
 
 
@@ -322,6 +396,113 @@ def run_cmd(cmd: str, timeout: float | None = None) -> str:
         ).stdout.strip()
     except Exception:
         return ""
+
+
+# --- browsing the host filesystem ------------------------------------------
+
+#: Never shown in the folder picker: noisy, huge, or irrelevant to picking a
+#: project. Kept small and explicit rather than a broad blocklist.
+BROWSE_SKIP = {
+    ".git", ".cache", ".local", ".npm", ".pub-cache", ".gradle", ".dart_tool",
+    ".idea", ".vscode", "node_modules", "__pycache__", ".venv", "venv",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".Trash", "snap",
+}
+
+#: Guard against a pathological directory (a home with 50k entries) locking the UI.
+BROWSE_LIMIT = 1000
+
+
+def is_flutter_project(path: Path) -> bool:
+    """True when `path` is a Flutter app root: a pubspec plus an android/ dir.
+
+    Never raises: the picker walks directories the owner cannot read (a
+    root-owned `/lost+found`, for one), and one unreadable entry must not break
+    the whole listing.
+    """
+    try:
+        return (path / "pubspec.yaml").is_file() and (path / "android").is_dir()
+    except OSError:
+        return False
+
+
+def quick_dirs() -> list[dict[str, str]]:
+    """Shortcut entries for the folder picker: home, Projects, and the roots."""
+    entries: list[dict[str, str]] = []
+    home = Path.home()
+    candidates = [("Home", home), ("Projects", home / "Projects"), ("Data", fenox_data_dir())]
+    candidates.append(("/", Path("/")))
+    for label, path in candidates:
+        text = str(path)
+        if path.is_dir() and not any(entry["path"] == text for entry in entries):
+            entries.append({"label": label, "path": text})
+    return entries
+
+
+def fenox_data_dir() -> Path:
+    """The data directory, for the picker's shortcut. Mirrors `config.data_dir`."""
+    override = os.environ.get("FENOX_DATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return (Path(xdg).expanduser() if xdg else home_relative()) / "fenox"
+
+
+def home_relative() -> Path:
+    return Path.home() / ".local" / "share"
+
+
+def browse_dirs(path: str | None = None) -> dict:
+    """List the subdirectories of `path` for the folder picker.
+
+    Returns the resolved directory, its parent (None at the filesystem root), the
+    child directories, and where a Flutter app root is. Only directories are
+    returned: every caller of this endpoint is choosing a folder, never a file.
+    """
+    raw = (path or "").strip()
+    target = Path(raw).expanduser() if raw else Path.home()
+    try:
+        target = target.resolve(strict=True)
+    except (OSError, RuntimeError):
+        # A bad path is a normal thing to arrive at from a stale bookmark, so
+        # fall back to the nearest directory that does exist rather than 500.
+        target = _nearest_existing(target)
+    if not target.is_dir():
+        raise NotADirectoryError(str(target))
+
+    dirs: list[dict[str, object]] = []
+    truncated = False
+    try:
+        entries = sorted(os.scandir(target), key=lambda e: e.name.lower())
+    except OSError as exc:
+        raise PermissionError(str(target)) from exc
+    for entry in entries:
+        if len(dirs) >= BROWSE_LIMIT:
+            truncated = True
+            break
+        try:
+            if not entry.is_dir() or entry.name in BROWSE_SKIP or entry.name.startswith("."):
+                continue
+        except OSError:
+            continue  # a dangling symlink or a race; skip it rather than fail
+        child = Path(entry.path)
+        dirs.append({"name": entry.name, "path": str(child), "flutter": is_flutter_project(child)})
+    parent = target.parent if target.parent != target else None
+    return {
+        "path": str(target),
+        "parent": str(parent) if parent else None,
+        "dirs": dirs,
+        "truncated": truncated,
+        "flutter": is_flutter_project(target),
+        "quick": quick_dirs(),
+    }
+
+
+def _nearest_existing(path: Path) -> Path:
+    """Walk up from `path` until something exists, so the picker can recover."""
+    for candidate in [path, *path.parents]:
+        if candidate.is_dir():
+            return candidate
+    return Path.home()
 
 
 # --- output directories ----------------------------------------------------

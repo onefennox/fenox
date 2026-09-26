@@ -8,10 +8,9 @@ runs `sudo` for you.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 
-from . import adb, host, mirror
+from . import adb, connect, env, host, mirror
 
 # name, what it is for, whether Fenox needs it, and how to get it.
 TOOLS = [
@@ -54,59 +53,82 @@ def _version(binary: str, name: str) -> str:
 
 
 def _binary_for(name: str, settings: dict) -> str | None:
-    """Resolve a tool the same way the rest of Fenox does.
+    """Deprecated: `env.tool` is the single owner of tool resolution and version.
 
-    adb and Flutter are special: they may be configured, or live somewhere
-    outside PATH, so `shutil.which` alone would report false negatives.
+    Kept so existing callers keep working, but it no longer parses anything — the
+    two implementations of "what version is this adb" is how the product ended up
+    contradicting itself.
     """
-    if name == "adb":
-        return host.adb_client(settings.get("adb_path"))
-    if name == "flutter":
-        return host.find_flutter(settings.get("flutter_path"))
-    return shutil.which(name)
+    return env.tool(name, settings).path or None
 
 
 def _check_tool(name: str, settings: dict) -> dict:
-    binary = _binary_for(name, settings)
-    return {
-        "name": name,
-        "present": binary is not None,
-        "version": _version(binary, name) if binary else "",
-        "path": binary or "",
-    }
+    return env.tool(name, settings).as_dict()
 
 
-def checks(settings: dict | None = None) -> dict:
-    """Environment report: each tool, the adb topology, and platform notes."""
+def checks(settings: dict | None = None, store=None, deep: bool = True) -> dict:
+    """The environment, plus what is actually wrong with it.
+
+    This used to be an inventory that reported presence and was confident about
+    USB being usable. On a WSL machine whose phone was plugged in and
+    unreachable it printed every tool as `ok` and stated that USB devices were
+    visible through the Windows adb, which was the reason it was useless: a
+    report that says everything is fine on a machine where nothing works is
+    worse than no report.
+
+    So the tool list is still here, but the verdict comes from `connect`, and a
+    claim about device visibility is only ever made after devices were actually
+    seen.
+    """
     settings = settings or {}
-    tools = []
-    for name, purpose, required, package in TOOLS:
-        found = _check_tool(name, settings)
-        found.update({
-            "purpose": purpose,
-            "required": required,
-            "installable": package is not None,
-            "requires_sudo": package is not None,
-            "manual": MANUAL.get(name),
-        })
-        tools.append(found)
+    topology = env.adb_topology(settings)
+    tool_rows = [probed.as_dict() for probed in env.tools(settings)]
+    by_name = {row["name"]: row for row in tool_rows}
+    for row in tool_rows:
+        row["manual"] = MANUAL.get(row["name"])
 
-    windows_adb = host.find_windows_adb()
-    notes = []
+    findings = connect.diagnose(store, deep=deep)
+    connected = adb.connected_ids()
+
+    notes: list[dict] = []
     if host.IS_WSL:
-        if windows_adb:
-            notes.append({"tone": "ok", "text": f"Windows adb found at {windows_adb}; USB devices are visible through it."})
+        if topology.windows_exe:
+            notes.append({
+                "tone": "ok",
+                "text": f"Windows adb found at {topology.windows_exe}; Fenox will use it for USB devices.",
+            })
         else:
             notes.append({
                 "tone": "warn",
-                "text": "Windows adb was not found. USB debugging over WSL needs Android Platform Tools installed on Windows.",
+                "text": (
+                    "Windows adb was not found. USB debugging over WSL needs Android Platform "
+                    "Tools installed on Windows; wireless debugging does not."
+                ),
             })
+    if connected:
+        notes.append({"tone": "ok", "text": f"adb is serving {len(connected)} device(s)."})
+    elif not [finding for finding in findings if finding.severity == connect.ERROR]:
+        notes.append({
+            "tone": "info",
+            "text": "No devices are connected right now. That is expected on an idle machine.",
+        })
 
     return {
         "platform": {"linux": host.IS_LINUX, "wsl": host.IS_WSL, "macos": host.IS_MACOS},
-        "adb": {"windows_exe": windows_adb, "server_port": adb.server_port()},
-        "tools": tools,
+        "adb": {
+            "windows_exe": topology.windows_exe,
+            "server_port": topology.configured_port,
+            "active_port": topology.active_port,
+            "version": topology.version,
+        },
+        "tools": tool_rows,
         "notes": notes,
+        "findings": [finding.as_dict() for finding in findings],
+        "connected": connected,
+        "ok": not [finding for finding in findings if finding.severity == connect.ERROR],
+        # Kept so a caller can still ask "is this tool usable" without the
+        # duplicated resolution logic that used to live here.
+        "required_missing": [name for name, row in by_name.items() if row["required"] and not row["present"]],
     }
 
 

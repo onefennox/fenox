@@ -13,7 +13,9 @@ router = APIRouter(prefix="/api/projects", tags=["projects"], dependencies=[Depe
 
 
 class ProjectCreate(BaseModel):
-    name: str
+    # Optional: an omitted or blank name is derived from the folder, so picking a
+    # directory in the browser is enough to register a project.
+    name: str = ""
     path: str
     port: str | None = None
     api_local: str | None = None
@@ -50,7 +52,7 @@ def list_projects(request: Request) -> dict:
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_project(request: Request, body: ProjectCreate) -> dict:
     store = request.app.state.store
-    name = projects.sanitize_name(body.name)
+    name = projects.sanitize_name(body.name) or projects.suggest_name(body.path, set(store.projects()))
     if not name:
         raise HTTPException(status_code=422, detail="invalid project name")
     existing = store.project(name)
