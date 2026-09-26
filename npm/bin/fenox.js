@@ -39,6 +39,26 @@ function isExecutable(candidate) {
   }
 }
 
+/**
+ * A private directory for uv to link the tool into.
+ *
+ * This exists to avoid a real collision. npm's global prefix here is ~/.local,
+ * and uv links tool binaries into ~/.local/bin as well — so a plain
+ * `uv tool install` aborts with "Executable already exists: fenox", because the
+ * npm shim is already sitting exactly where uv wants to put its symlink.
+ *
+ * Pointing uv somewhere private means it never touches the shim, and the
+ * launcher reads the real binary out of uv's tool directory regardless.
+ */
+function npmToolBinDir() {
+  if (isWindows) {
+    const local = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    return path.join(local, "fenox", "npm-bin");
+  }
+  const data = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
+  return path.join(data, "fenox", "npm-bin");
+}
+
 /** Where `uv` keeps managed tool environments. */
 function uvToolsDir() {
   if (isWindows) {
@@ -130,7 +150,24 @@ function installUv() {
 
 function installWithUv(uv) {
   process.stderr.write(`Installing ${PACKAGE} from ${REPO} (first run only)...\n`);
-  const result = spawnSync(uv, ["tool", "install", `${PACKAGE} @ git+${REPO}`], { stdio: "inherit" });
+  const binDir = npmToolBinDir();
+  try {
+    fs.mkdirSync(binDir, { recursive: true });
+  } catch {
+    // Not fatal: uv will fall back to its default and the error below will say so.
+  }
+  const result = spawnSync(uv, ["tool", "install", `${PACKAGE} @ git+${REPO}`], {
+    stdio: "inherit",
+    // Keep uv's symlink out of the npm shim's way; see npmToolBinDir.
+    env: { ...process.env, UV_TOOL_BIN_DIR: binDir },
+  });
+  if (result.status !== 0) {
+    process.stderr.write(
+      `\nThat did not work. It is often because another Fenox occupies uv's tool\n` +
+        `directory. Remove it and run this again:\n` +
+        `  ${uv} tool uninstall ${PACKAGE}\n`,
+    );
+  }
   return result.status === 0;
 }
 
