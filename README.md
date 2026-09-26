@@ -114,6 +114,19 @@ bridge is missing, gives you the exact command.
 
 ## Install
 
+### With uv or pipx — recommended
+
+```bash
+uv tool install "fenox @ git+https://github.com/onefennox/fenox"
+# or
+pipx install "fenox @ git+https://github.com/onefennox/fenox"
+```
+
+This is the most reliable route and the one to reach for if anything below
+misbehaves. It clones straight from GitHub, so it is never affected by the CDN
+caching described under the one-liner, and it installs Fenox isolated from your
+system Python. Upgrade later with `uv tool upgrade fenox` or `pipx upgrade fenox`.
+
 ### One-liner (Linux / WSL)
 
 ```bash
@@ -124,6 +137,19 @@ This creates a private virtual environment under the data directory, puts a
 `fenox` launcher on `PATH`, prints a report on your machine, and installs a
 systemd user service.
 
+> **If the one-liner misbehaves straight after a release, use the pinned form.**
+> `raw.githubusercontent.com` is a CDN and keeps serving the previous copy of a
+> file for a short while after a push — long enough that a freshly published
+> installer can still contain the previous release's URLs. Pin the commit and the
+> content is immutable:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/$(git ls-remote https://github.com/onefennox/fenox main | cut -f1)/packaging/install.sh | bash
+> ```
+>
+> `uv`/`pipx` and a plain `git clone` are unaffected, because they clone from
+> GitHub rather than fetching a cached file.
+
 To install system-wide instead, for a shared machine:
 
 ```bash
@@ -132,18 +158,6 @@ curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/inst
 
 which uses the usual FHS layout — code in `/usr/local/lib/fenox`, launcher in
 `/usr/local/bin`.
-
-### With uv or pipx
-
-If you already use either, this is the shortest path and needs no installer
-script. Both install Fenox isolated from your system Python and keep it
-upgradable with `uv tool upgrade` / `pipx upgrade`.
-
-```bash
-uv tool install "fenox @ git+https://github.com/onefennox/fenox"
-# or
-pipx install "fenox @ git+https://github.com/onefennox/fenox"
-```
 
 ### From a checkout
 
