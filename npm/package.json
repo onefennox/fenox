@@ -1,0 +1,38 @@
+{
+  "name": "fenox",
+  "version": "0.1.0",
+  "description": "Android device management and Flutter development, from the browser — npm entry point that installs and runs the Fenox hub",
+  "keywords": [
+    "android",
+    "adb",
+    "flutter",
+    "scrcpy",
+    "devices",
+    "hot-reload"
+  ],
+  "homepage": "https://github.com/onefennox/fenox#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onefennox/fenox.git"
+  },
+  "bugs": {
+    "url": "https://github.com/onefennox/fenox/issues"
+  },
+  "license": "MIT",
+  "author": "onefennox",
+  "bin": {
+    "fenox": "bin/fenox.js"
+  },
+  "files": [
+    "bin/fenox.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ]
+}

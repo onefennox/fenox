@@ -134,6 +134,22 @@ curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/inst
 which uses the usual FHS layout — code in `/usr/local/lib/fenox`, launcher in
 `/usr/local/bin`.
 
+### With npm
+
+```bash
+npm install -g fenox
+```
+
+The npm package is a small launcher: on first run it makes sure
+[uv](https://github.com/astral-sh/uv) is present, uses it to install Fenox as an
+isolated tool, and from then on just executes it. **You do not need Python
+installed** — uv fetches and manages one — which makes this the smoothest route
+on Windows, where npm's global bin directory is already on `PATH` and Python
+setup is otherwise the fiddly part.
+
+If you already have Fenox from another route, this launcher uses that one and
+leaves it alone; installing the npm package never replaces an existing install.
+
 ### Already use uv or pipx?
 
 Either works and is a single line, with Fenox isolated from your system Python:

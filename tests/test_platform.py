@@ -1,6 +1,7 @@
 import os
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -203,3 +204,90 @@ def test_completions_are_valid_shell_syntax():
         script = capsys_output(shell)
         result = subprocess.run([binary, flag], input=script, capture_output=True, text=True)
         assert result.returncode == 0, f"{shell} rejected the completion: {result.stderr}"
+
+
+# --- the npm launcher ------------------------------------------------------
+# `npm install -g fenox` puts a Node shim on PATH called `fenox`, and uv links
+# the real binary into the same directory. The launcher has to tell those apart
+# or it re-executes itself on every call, forever.
+
+NPM_DIR = Path(__file__).resolve().parent.parent / "npm"
+
+
+def _node() -> str:
+    import shutil
+
+    found = shutil.which("node")
+    if not found:
+        pytest.skip("node is not installed")
+    return found
+
+
+def test_npm_launcher_is_valid_javascript():
+    launcher = NPM_DIR / "bin" / "fenox.js"
+    if not launcher.is_file():
+        pytest.skip("the npm package is not in this checkout")
+    result = subprocess.run([_node(), "--check", str(launcher)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_npm_manifest_is_publishable():
+    import json
+
+    manifest = NPM_DIR / "package.json"
+    if not manifest.is_file():
+        pytest.skip("the npm package is not in this checkout")
+    data = json.loads(manifest.read_text())
+
+    assert data["name"] == "fenox"
+    assert data["bin"]["fenox"] == "bin/fenox.js"
+    # Everything the published tarball needs, and nothing that should not ship.
+    assert set(data["files"]) == {"bin/fenox.js", "README.md"}
+    assert data["license"] == "MIT"
+    for field in ("version", "description", "repository", "engines"):
+        assert field in data, f"{field} is missing from package.json"
+
+
+def test_npm_launcher_never_resolves_to_itself(tmp_path):
+    """The regression this guards against is an infinite exec loop.
+
+    Set up the collision the launcher exists to survive: `npm -g` puts a shim
+    called `fenox` on PATH, and the real binary lives in uv's tool directory.
+    FENOX_BIN is deliberately unset, because that shortcut is checked first and
+    would stop the PATH logic — and the bug — from ever being reached.
+    """
+    launcher = NPM_DIR / "bin" / "fenox.js"
+    if not launcher.is_file():
+        pytest.skip("the npm package is not in this checkout")
+
+    # The real binary, where uv keeps it.
+    uv_bin = tmp_path / "data" / "uv" / "tools" / "fenox" / "bin"
+    uv_bin.mkdir(parents=True)
+    real = uv_bin / "fenox"
+    real.write_text("#!/bin/sh\necho REAL_FENOX_RAN\n")
+    real.chmod(0o755)
+
+    # The npm shim, first on PATH and pointing at the launcher itself.
+    shim_dir = tmp_path / "npm-bin"
+    shim_dir.mkdir()
+    shim = shim_dir / "fenox"
+    shim.symlink_to(launcher)
+
+    env = {
+        **os.environ,
+        "PATH": f"{shim_dir}{os.pathsep}{uv_bin}{os.pathsep}{os.environ['PATH']}",
+        "XDG_DATA_HOME": str(tmp_path / "data"),
+    }
+    env.pop("FENOX_BIN", None)
+
+    result = subprocess.run(
+        [_node(), str(launcher), "--version"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+
+    assert "REAL_FENOX_RAN" in result.stdout, result.stderr
+    # Exactly once: a self-exec loop would emit it many times or time out.
+    assert result.stdout.count("REAL_FENOX_RAN") == 1, result.stdout
