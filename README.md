@@ -114,41 +114,16 @@ bridge is missing, gives you the exact command.
 
 ## Install
 
-### With uv or pipx — recommended
-
-```bash
-uv tool install "fenox @ git+https://github.com/onefennox/fenox"
-# or
-pipx install "fenox @ git+https://github.com/onefennox/fenox"
-```
-
-This is the most reliable route and the one to reach for if anything below
-misbehaves. It clones straight from GitHub, so it is never affected by the CDN
-caching described under the one-liner, and it installs Fenox isolated from your
-system Python. Upgrade later with `uv tool upgrade fenox` or `pipx upgrade fenox`.
-
 ### One-liner (Linux / WSL)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/install.sh | bash
 ```
 
-This creates a private virtual environment under the data directory, puts a
-`fenox` launcher on `PATH`, prints a report on your machine, and installs a
+This is the whole install. It creates a private virtual environment under the
+data directory, puts a `fenox` launcher on `PATH`, offers to add that to your
+`PATH` if it isn't there, prints a report on your machine, and installs a
 systemd user service.
-
-> **If the one-liner misbehaves straight after a release, use the pinned form.**
-> `raw.githubusercontent.com` is a CDN and keeps serving the previous copy of a
-> file for a short while after a push — long enough that a freshly published
-> installer can still contain the previous release's URLs. Pin the commit and the
-> content is immutable:
->
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/$(git ls-remote https://github.com/onefennox/fenox main | cut -f1)/packaging/install.sh | bash
-> ```
->
-> `uv`/`pipx` and a plain `git clone` are unaffected, because they clone from
-> GitHub rather than fetching a cached file.
 
 To install system-wide instead, for a shared machine:
 
@@ -159,12 +134,43 @@ curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/inst
 which uses the usual FHS layout — code in `/usr/local/lib/fenox`, launcher in
 `/usr/local/bin`.
 
+### Already use uv or pipx?
+
+Either works and is a single line, with Fenox isolated from your system Python:
+
+```bash
+uv tool install "fenox @ git+https://github.com/onefennox/fenox"
+# or
+pipx install "fenox @ git+https://github.com/onefennox/fenox"
+```
+
+Upgrade with `uv tool upgrade fenox` or `pipx upgrade fenox`. Both read the
+repository directly, so they are unaffected by the CDN caching note below.
+
 ### From a checkout
 
 ```bash
 git clone https://github.com/onefennox/fenox.git
 cd fenox
 bash packaging/install.sh
+```
+
+Use this if you want to pin a release, or work on Fenox itself.
+
+### If the one-liner fails
+
+`raw.githubusercontent.com` is a CDN, and for a short window after a new
+version is pushed it keeps serving the *previous* copy of `install.sh` — long
+enough that the installer you fetched can still point at an older URL and fail
+with `Repository not found`. This only ever happens in the first minutes after a
+release. Two ways around it:
+
+```bash
+# pin the commit, so the content is immutable
+curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/$(git ls-remote https://github.com/onefennox/fenox main | cut -f1)/packaging/install.sh | bash
+
+# or clone and install, which reads the repository rather than a cached file
+git clone https://github.com/onefennox/fenox.git && bash fenox/packaging/install.sh
 ```
 
 ### Why there is no Docker image
