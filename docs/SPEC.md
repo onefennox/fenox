@@ -47,14 +47,14 @@ core, for power users and scripts. The browser is the product.
 | | |
 | --- | --- |
 | Product name | **Fenox** |
-| Repo / org | `onefenox/fenox` |
+| Repo / org | `onefennox/fenox` |
 | Install | GitHub → one curl command, `uv tool`, `pipx`, or from a checkout |
 | Runtime | one process, one port |
 | Platform | Linux + WSL (matches today's product); macOS/Windows out of scope for v1 |
 
 Install paths (mirrors how OmniRoute is distributed):
 
-- **curl one-liner** — `curl -fsSL https://raw.githubusercontent.com/onefenox/fenox/main/packaging/install.sh | bash`.
+- **curl one-liner** — `curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/install.sh | bash`.
   Downloads a checksum-verified release, sets up a private venv under the data
   dir, installs a launcher on `PATH`, optionally installs the systemd user service.
 - **systemd `--user`** — `systemctl --user enable --now fenox` keeps the hub alive

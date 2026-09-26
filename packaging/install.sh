@@ -2,14 +2,14 @@
 # Fenox installer.
 #
 #   From a checkout:   bash packaging/install.sh
-#   One-liner:         curl -fsSL https://raw.githubusercontent.com/onefenox/fenox/main/packaging/install.sh | bash
+#   One-liner:         curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/install.sh | bash
 #
 # Installs Fenox into a private virtual environment under the data directory,
 # puts a `fenox` launcher on PATH, and optionally installs the systemd user
 # service. Linux and WSL only.
 set -euo pipefail
 
-REPO_URL="https://github.com/onefenox/fenox.git"
+REPO_URL="https://github.com/onefennox/fenox.git"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd || pwd)"
 INSTALL_SYSTEM=0
 BIN_DIR="${HOME}/.local/bin"

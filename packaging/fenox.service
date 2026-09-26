@@ -1,6 +1,6 @@
 [Unit]
 Description=Fenox — Android device management and Flutter development hub
-Documentation=https://github.com/onefenox/fenox
+Documentation=https://github.com/onefennox/fenox
 After=network-online.target
 
 [Service]

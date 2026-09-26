@@ -12,7 +12,7 @@ One process, one port. The dashboard, the REST API and the WebSockets are served
 together, and the built web app is bundled into the Python package.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/onefenox/fenox/main/packaging/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/install.sh | bash
 fenox
 ```
 
@@ -117,7 +117,7 @@ bridge is missing, gives you the exact command.
 ### One-liner (Linux / WSL)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/onefenox/fenox/main/packaging/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/install.sh | bash
 ```
 
 This creates a private virtual environment under the data directory, puts a
@@ -127,7 +127,7 @@ systemd user service.
 To install system-wide instead, for a shared machine:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/onefenox/fenox/main/packaging/install.sh | sudo bash -s -- --system
+curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/install.sh | sudo bash -s -- --system
 ```
 
 which uses the usual FHS layout — code in `/usr/local/lib/fenox`, launcher in
@@ -140,15 +140,15 @@ script. Both install Fenox isolated from your system Python and keep it
 upgradable with `uv tool upgrade` / `pipx upgrade`.
 
 ```bash
-uv tool install "fenox @ git+https://github.com/onefenox/fenox"
+uv tool install "fenox @ git+https://github.com/onefennox/fenox"
 # or
-pipx install "fenox @ git+https://github.com/onefenox/fenox"
+pipx install "fenox @ git+https://github.com/onefennox/fenox"
 ```
 
 ### From a checkout
 
 ```bash
-git clone https://github.com/onefenox/fenox.git
+git clone https://github.com/onefennox/fenox.git
 cd fenox
 bash packaging/install.sh
 ```

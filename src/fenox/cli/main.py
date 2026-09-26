@@ -24,7 +24,7 @@ from ..version import __version__
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 SERVICE_NAME = "fenox.service"
-REPO_URL = "https://github.com/onefenox/fenox.git"
+REPO_URL = "https://github.com/onefennox/fenox.git"
 CONFIG_KEYS = ("reach", "port", "remote_domain", "projects_dir", "flutter_path", "adb_path", "adb_port")
 INT_KEYS = {"port", "adb_port"}
 

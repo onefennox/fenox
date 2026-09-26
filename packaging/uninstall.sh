@@ -2,7 +2,7 @@
 # Fenox uninstaller.
 #
 #   From a checkout:   bash packaging/uninstall.sh
-#   One-liner:         curl -fsSL https://raw.githubusercontent.com/onefenox/fenox/main/packaging/uninstall.sh | bash
+#   One-liner:         curl -fsSL https://raw.githubusercontent.com/onefennox/fenox/main/packaging/uninstall.sh | bash
 #
 # Removes the launcher, the private virtual environment, the systemd service and
 # (unless --keep-data is given) the data directory.
