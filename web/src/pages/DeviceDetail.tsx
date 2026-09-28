@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, AppWindow, FolderOpen, Gauge, Info, MonitorSmartphone, Smartphone, SlidersHorizontal } from "lucide-react";
+import { Activity, AppWindow, FolderOpen, Gauge, Globe, Info, MonitorSmartphone, SlidersHorizontal, Smartphone } from "lucide-react";
 import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 
@@ -14,6 +14,7 @@ import { FilesPanel } from "./device/FilesPanel";
 import { OverviewPanel } from "./device/OverviewPanel";
 import { PhonePanel } from "./device/PhonePanel";
 import { ScreenInputPanel } from "./device/ScreenInputPanel";
+import { WebPanel } from "./device/WebPanel";
 
 export function DeviceDetailPage() {
   const { id = "" } = useParams();
@@ -79,6 +80,7 @@ export function DeviceDetailPage() {
       <Tabs
         tabs={[
           { id: "overview", label: "Overview", icon: <Info size={16} />, render: () => <OverviewPanel device={device} /> },
+          { id: "web", label: "Web", icon: <Globe size={16} />, render: () => <WebPanel device={device} /> },
           { id: "screen", label: "Remote control", icon: <MonitorSmartphone size={16} />, render: () => <ScreenInputPanel device={device} /> },
           { id: "apps", label: "Apps", icon: <AppWindow size={16} />, render: () => <AppsPanel device={device} /> },
           { id: "files", label: "Files", icon: <FolderOpen size={16} />, render: () => <FilesPanel device={device} /> },
