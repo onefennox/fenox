@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from fenox.core import builds, flutter
 from fenox.server.app import create_app
+from fenox.server.routes import builds as builds_module
 
 PASSWORD = "a-strong-owner-password"
 
@@ -27,8 +28,15 @@ def make_project(root: Path, name: str = "demo") -> Path:
     return project
 
 
-def make_fake_flutter(root: Path, *, fail: bool = False, omit_artifact: bool = False) -> Path:
-    """A stand-in for the SDK that behaves like `flutter build`."""
+def make_fake_flutter(
+    root: Path, *, fail: bool = False, omit_artifact: bool = False, sleep: int = 0
+) -> Path:
+    """A stand-in for the SDK that behaves like `flutter build`.
+
+    It writes whichever artifact the requested command would, so a test of the
+    AAB path produces an AAB rather than a build that failed for an unrelated
+    reason.
+    """
     root.mkdir(parents=True, exist_ok=True)
     script = root / "fake-flutter"
     lines = [
@@ -36,11 +44,22 @@ def make_fake_flutter(root: Path, *, fail: bool = False, omit_artifact: bool = F
         'echo "Running Gradle task assembleDebug..."',
         'echo "Running with sound null safety"',
     ]
+    if sleep:
+        # A window in which the build is still running, which a fast script
+        # cannot provide.
+        lines.append(f"sleep {sleep}")
     if not omit_artifact:
-        # The path `flutter build apk --debug` writes to, relative to the project.
         lines += [
-            'mkdir -p build/app/outputs/flutter-apk',
-            'printf "FAKE-APK-CONTENTS" > build/app/outputs/flutter-apk/app-debug.apk',
+            'case "$*" in',
+            "  *appbundle*)",
+            "    mkdir -p build/app/outputs/bundle/release",
+            '    printf "FAKE-AAB-CONTENTS" > build/app/outputs/bundle/release/app-release.aab',
+            "    ;;",
+            "  *)",
+            "    mkdir -p build/app/outputs/flutter-apk",
+            '    printf "FAKE-APK-CONTENTS" > build/app/outputs/flutter-apk/app-debug.apk',
+            "    ;;",
+            "esac",
         ]
     lines.append("exit 1" if fail else "exit 0")
     script.write_text("\n".join(lines) + "\n")
@@ -235,3 +254,96 @@ def test_history_survives_a_restart(tmp_path, monkeypatch):
         rows = client.get("/api/builds").json()["builds"]
         assert [row["id"] for row in rows] == [build_id]
         assert rows[0]["artifact_name"] == "app-debug.apk"
+
+
+# --- installing a build onto a device ---------------------------------------
+# This is the join between the two halves of the product, so the interesting
+# cases are the refusals: the wrong kind of artifact, a device that is not
+# there, and a build that has not finished.
+
+def _make_build(client, kind="apk-debug") -> str:
+    build_id = client.post("/api/projects/demo/builds", json={"kind": kind}).json()["id"]
+    wait_for(build_id, client.app.state.builds)
+    return build_id
+
+
+def _register_device(client, alias="phone", **extra):
+    client.app.state.store.upsert_device(alias, {"type": "usb", "serial": "SERIAL", **extra})
+
+
+def test_install_pushes_the_artifact_to_the_device(client, monkeypatch):
+    _register_device(client)
+    monkeypatch.setattr(builds_module.devices, "resolve_serial", lambda store, alias, connected=None: "SERIAL")
+    installed = {}
+    monkeypatch.setattr(
+        builds_module.toolbox, "install_apk",
+        lambda serial, path: installed.update(serial=serial, path=path) or (True, "Success"),
+    )
+
+    build_id = _make_build(client)
+    response = client.post(f"/api/builds/{build_id}/install", json={"device": "phone"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True
+    assert installed["serial"] == "SERIAL"
+    # The file handed to adb is the copy kept in the data directory, not the one
+    # in Flutter's build/ folder, which a later clean would remove.
+    assert installed["path"].endswith("app-debug.apk")
+    assert "outputs" not in installed["path"]
+
+
+def test_an_aab_is_refused_with_the_reason(client, monkeypatch):
+    """An AAB is a Play upload; failing with an archive error would be useless."""
+    _register_device(client)
+    monkeypatch.setattr(builds_module.devices, "resolve_serial", lambda store, alias, connected=None: "SERIAL")
+
+    build_id = _make_build(client, kind="aab-release")
+    response = client.post(f"/api/builds/{build_id}/install", json={"device": "phone"})
+
+    assert response.status_code == 409
+    assert "Play" in response.json()["detail"]
+
+
+def test_install_reports_a_device_that_is_not_connected(client, monkeypatch):
+    _register_device(client)
+    monkeypatch.setattr(builds_module.devices, "resolve_serial", lambda store, alias, connected=None: None)
+
+    build_id = _make_build(client)
+    response = client.post(f"/api/builds/{build_id}/install", json={"device": "phone"})
+
+    assert response.status_code == 409
+    assert "not connected" in response.json()["detail"]
+
+
+def test_install_rejects_an_unknown_device(client):
+    build_id = _make_build(client)
+
+    assert client.post(f"/api/builds/{build_id}/install", json={"device": "nope"}).status_code == 404
+
+
+def test_install_rejects_a_build_that_has_not_finished(client, monkeypatch):
+    """A build still running has no artifact to push yet."""
+    _register_device(client)
+    # A build that takes a moment, so there is a running window to test.
+    slower = make_fake_flutter(client.project.parent / "slow-bin", sleep=3)
+    monkeypatch.setattr(flutter, "resolve", lambda c, p: str(slower))
+
+    build_id = client.post("/api/projects/demo/builds", json={"kind": "apk-debug"}).json()["id"]
+    assert client.app.state.builds.row(build_id)["status"] == "running"
+
+    response = client.post(f"/api/builds/{build_id}/install", json={"device": "phone"})
+
+    assert response.status_code == 409
+    assert "not finished" in response.json()["detail"]
+
+
+def test_install_reports_a_device_that_refuses(client, monkeypatch):
+    _register_device(client)
+    monkeypatch.setattr(builds_module.devices, "resolve_serial", lambda store, alias, connected=None: "SERIAL")
+    monkeypatch.setattr(builds_module.toolbox, "install_apk", lambda serial, path: (False, "INSTALL_FAILED_INSUFFICIENT_STORAGE"))
+
+    build_id = _make_build(client)
+    response = client.post(f"/api/builds/{build_id}/install", json={"device": "phone"})
+
+    assert response.status_code == 502
+    assert "INSUFFICIENT_STORAGE" in response.json()["detail"]

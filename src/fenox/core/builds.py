@@ -41,6 +41,7 @@ KINDS: dict[str, dict] = {
         "artifact": "build/app/outputs/flutter-apk/app-debug.apk",
         "filename": "app-debug.apk",
         "mode": "local",
+        "installable": True,
         "hint": "Fastest. Signed with the debug key, not for sharing.",
     },
     "apk-release": {
@@ -49,6 +50,7 @@ KINDS: dict[str, dict] = {
         "artifact": "build/app/outputs/flutter-apk/app-release.apk",
         "filename": "app-release.apk",
         "mode": "remote",
+        "installable": True,
         "hint": "Installable by anyone. Needs your signing config for a store.",
     },
     "apk-profile": {
@@ -57,6 +59,7 @@ KINDS: dict[str, dict] = {
         "artifact": "build/app/outputs/flutter-apk/app-profile.apk",
         "filename": "app-profile.apk",
         "mode": "remote",
+        "installable": True,
         "hint": "Release performance with tracing still on.",
     },
     "aab-release": {
@@ -65,6 +68,8 @@ KINDS: dict[str, dict] = {
         "artifact": "build/app/outputs/bundle/release/app-release.aab",
         "filename": "app-release.aab",
         "mode": "remote",
+        # An AAB is an upload for Play, not a file a phone can install.
+        "installable": False,
         "hint": "The format Google Play accepts. Not installable directly.",
     },
 }
@@ -147,12 +152,17 @@ class Build:
         self.ended_at = _now()
         if self.status == "cancelled":
             pass
-        elif code == 0:
-            self.status = "succeeded"
-            self._collect_artifact()
-        else:
+        elif code != 0:
             self.status = "failed"
             self.error = f"flutter build exited with code {code}"
+        else:
+            # Collect *before* publishing the status. Copying a large APK takes
+            # a moment, and a build that reports success while its artifact is
+            # not yet on disk is a build whose download or install fails — for
+            # anyone quick enough to click in that window.
+            self._collect_artifact()
+            if self.status != "failed":
+                self.status = "succeeded"
         self._notify({"type": "exit", "id": self.id, "status": self.status, "exit_code": code})
 
     def _collect_artifact(self) -> None:
@@ -240,6 +250,7 @@ class Build:
             "artifact_name": self.artifact_name,
             "artifact_size": self.artifact_size,
             "artifact_sha256": self.artifact_sha256,
+            "installable": bool((KINDS.get(self.kind) or {}).get("installable")),
             "error": self.error,
             "path": self.path,
         }

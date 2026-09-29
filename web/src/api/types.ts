@@ -306,6 +306,8 @@ export interface Build {
   artifact_sha256: string;
   error: string;
   path: string;
+  /** False for an AAB, which is a Play upload rather than something a phone installs. */
+  installable: boolean;
 }
 
 export interface BuildKind {

@@ -277,3 +277,9 @@ export const getProjectFile = (project: string, path: string) =>
   );
 
 export const listCaptures = () => api.get<{ directory: string; captures: Capture[] }>("/api/system/captures");
+
+export const installBuild = (buildId: string, device: string) =>
+  api.post<{ ok: boolean; device: string; artifact: string; detail: string }>(
+    `/api/builds/${buildId}/install`,
+    { device },
+  );

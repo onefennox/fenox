@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ...core import builds
+from ...core import builds, devices, toolbox
 from ..security import require_owner
 
 router = APIRouter(tags=["builds"], dependencies=[Depends(require_owner)])
@@ -106,3 +106,52 @@ def cancel_build(request: Request, build_id: str) -> dict:
 def delete_build(request: Request, build_id: str) -> None:
     if not _manager(request).remove(build_id):
         raise HTTPException(status_code=404, detail="build not found")
+
+
+class InstallRequest(BaseModel):
+    device: str
+
+
+@router.post("/api/builds/{build_id}/install")
+def install_build(request: Request, build_id: str, body: InstallRequest) -> dict:
+    """Push a built artifact to a device.
+
+    This is the join between the two halves of the product: a build produces a
+    file, a device can accept one, and until now nothing connected them. The
+    file is already on this machine, so the usual `adb install` path applies
+    unchanged.
+    """
+    manager = _manager(request)
+    store = request.app.state.store
+
+    row = manager.row(build_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="build not found")
+    if row.get("status") != "succeeded":
+        raise HTTPException(status_code=409, detail="that build has not finished successfully")
+
+    spec = builds.KINDS.get(row.get("kind", "")) or {}
+    if not spec.get("installable"):
+        # An AAB is a Play Store upload. Saying so is better than letting adb
+        # reject it with something about an archive.
+        raise HTTPException(
+            status_code=409,
+            detail="a release AAB cannot be installed directly — upload it to Play, or build an APK to sideload",
+        )
+
+    path = manager.artifact(build_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="that build has no artifact to install")
+
+    entry = store.device(body.device)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown device")
+
+    serial = devices.resolve_serial(store, body.device)
+    if serial is None:
+        raise HTTPException(status_code=409, detail=f"device '{body.device}' is not connected")
+
+    ok, detail = toolbox.install_apk(serial, str(path))
+    if not ok:
+        raise HTTPException(status_code=502, detail=detail or "the device refused the install")
+    return {"ok": True, "device": body.device, "serial": serial, "artifact": row.get("artifact_name"), "detail": detail}

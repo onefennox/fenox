@@ -4,6 +4,7 @@ import { getTelemetry, keys } from "@/api/queries";
 import type { Device } from "@/api/types";
 import { Card, Spinner } from "@/components/ui";
 import { CapturesCard } from "./CapturesCard";
+import { DeviceBuildsCard } from "./DeviceBuildsCard";
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -57,6 +58,8 @@ export function OverviewPanel({ device }: { device: Device }) {
           </>
         ) : null}
       </Card>
+
+      <DeviceBuildsCard device={device} />
 
       <CapturesCard />
 

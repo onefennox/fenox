@@ -1,19 +1,22 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
   Download,
   Hammer,
   Loader2,
+  Smartphone,
   Trash2,
   XCircle,
   Ban,
   ChevronRight,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
-import { artifactUrl, cancelBuild, deleteBuild, keys, startBuild } from "@/api/queries";
+import { artifactUrl, cancelBuild, deleteBuild, installBuild, keys, listDevices, startBuild } from "@/api/queries";
 import type { Build, BuildKind } from "@/api/types";
 import { Badge } from "@/components/ui";
+import { useActiveDevice } from "@/hooks/useActiveDevice";
 import { cn, formatBytes, timeAgo } from "@/lib/format";
 import { toast } from "@/lib/toast";
 
@@ -100,6 +103,95 @@ export function BuildLauncher({
   );
 }
 
+/**
+ * Install a built artifact onto a device.
+ *
+ * This is the join between the two halves of the product: a build produces a
+ * file, a device accepts one, and nothing connected them until now.
+ *
+ * The active device is offered first, because the common case is "put this on
+ * the phone I am already working with" — and picking from a list every time is
+ * a tax on that. An AAB is refused with the reason, since it is a Play upload
+ * rather than a file a phone can install.
+ */
+export function InstallButton({ build, compact = false }: { build: Build; compact?: boolean }) {
+  const devices = useQuery({ queryKey: keys.devices, queryFn: listDevices, refetchInterval: 10000 });
+  const { activeId } = useActiveDevice();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const install = useMutation({
+    mutationFn: (device: string) => installBuild(build.id, device),
+    onSuccess: (result) => toast.success(`Installed on ${result.device}`, result.artifact),
+    onError: (error: Error) => toast.error("Could not install", error.message),
+  });
+
+  if (!build.installable) {
+    return (
+      <span
+        title="An AAB is a Play Store upload, not something a phone installs. Build an APK to sideload."
+        className="shrink-0 cursor-help rounded-[var(--radius-md)] px-2 py-1 text-[11px] text-[var(--color-subtle)]"
+      >
+        AAB
+      </span>
+    );
+  }
+
+  const online = (devices.data?.devices ?? []).filter((device) => device.online && !device.disabled);
+  const ordered = activeId && online.some((d) => d.id === activeId)
+    ? [...online].sort((a, b) => (a.id === activeId ? -1 : b.id === activeId ? 1 : 0))
+    : online;
+
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button
+        disabled={install.isPending || online.length === 0}
+        onClick={() => setOpen((current) => !current)}
+        title={online.length === 0 ? "No device is online" : "Install on a device"}
+        className={cn(
+          "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 text-xs font-medium transition-colors",
+          "hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-panel-hover)] disabled:cursor-not-allowed disabled:opacity-40",
+        )}
+      >
+        {install.isPending ? <Loader2 size={12} className="animate-spin" /> : <Smartphone size={12} />}
+        {compact ? "" : install.isPending ? "Installing…" : "Install"}
+      </button>
+      {open ? (
+        <div className="animate-in absolute right-0 bottom-full z-40 mb-1 w-56 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-panel)] py-1 shadow-xl">
+          <p className="px-3 py-1 text-[10px] font-semibold tracking-wider text-[var(--color-subtle)] uppercase">
+            Install on
+          </p>
+          {ordered.map((device) => (
+            <button
+              key={device.id}
+              onClick={() => {
+                setOpen(false);
+                install.mutate(device.id);
+              }}
+              className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+            >
+              <Smartphone size={12} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">{device.id}</span>
+              {device.id === activeId ? (
+                <span className="shrink-0 text-[10px] text-[var(--color-accent)]">active</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** One build as a dense row: artifact, size, age, status, actions. */
 export function BuildRow({
   build,
@@ -162,6 +254,7 @@ export function BuildRow({
       <BuildStatus status={build.status} />
 
       <div className="flex shrink-0 items-center gap-1" onClick={(event) => event.stopPropagation()}>
+        {ready ? <InstallButton build={build} /> : null}
         {ready ? (
           <a
             href={artifactUrl(build.id)}
