@@ -8,6 +8,7 @@ import { Spinner } from "@/components/ui";
 import { ActiveDeviceProvider } from "@/hooks/useActiveDevice";
 import { useDeviceEvents } from "@/hooks/useDeviceEvents";
 import { LiveContext } from "@/hooks/useLive";
+import { BuildsPage } from "@/pages/Builds";
 import { ConnectPage } from "@/pages/Connect";
 import { DashboardPage } from "@/pages/Dashboard";
 import { DeviceDetailPage } from "@/pages/DeviceDetail";
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="connect" element={<ConnectPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:name" element={<ProjectDetailPage />} />
+          <Route path="builds" element={<BuildsPage />} />
           <Route path="runs" element={<RunsPage />} />
           <Route path="runs/:id" element={<RunPage />} />
           <Route path="system" element={<SystemPage />} />

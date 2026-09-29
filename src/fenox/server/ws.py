@@ -175,3 +175,129 @@ async def run_stream(websocket: WebSocket, run_id: str) -> None:
             await websocket.close()
         except RuntimeError:
             pass
+
+
+@router.websocket("/ws/browser")
+async def browser_socket(websocket: WebSocket) -> None:
+    """Frame stream out, input events in, on one socket.
+
+    One direction per task: only `pump` sends and only `listen` receives, which
+    is the pattern Starlette's WebSocket supports safely.
+    """
+    if not _authorized(websocket):
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    instance = websocket.app.state.browser
+
+    try:
+        await instance.start()
+        instance.clear_frames()
+        await instance.start_screencast()
+    except Exception as exc:  # reported to the panel rather than only the log
+        await websocket.send_json({"type": "error", "message": str(exc)})
+        await websocket.close()
+        return
+
+    async def pump() -> None:
+        while True:
+            try:
+                frame = await instance.next_frame(timeout=10)
+            except TimeoutError:
+                continue
+            await websocket.send_bytes(frame)
+
+    async def listen() -> None:
+        while True:
+            message = await websocket.receive_json()
+            kind = message.get("t")
+            try:
+                if kind == "click":
+                    await instance.click(float(message["x"]), float(message["y"]))
+                elif kind == "scroll":
+                    await instance.scroll(
+                        float(message["x"]), float(message["y"]),
+                        float(message.get("dy", 0)), float(message.get("dx", 0)),
+                    )
+                elif kind == "text":
+                    await instance.type_text(str(message.get("v", "")))
+                elif kind == "device":
+                    await instance.set_device(str(message.get("v", "")))
+                    await instance.reload()
+                elif kind == "navigate":
+                    await instance.navigate(str(message.get("v", "")))
+                elif kind == "key":
+                    await instance.press(str(message.get("v", "")))
+                elif kind == "back":
+                    await instance.go_back()
+                elif kind == "reload":
+                    await instance.reload()
+            except Exception as exc:
+                # A single bad input must not tear down the stream.
+                await websocket.send_json({"type": "input-error", "message": str(exc)})
+
+    tasks = [asyncio.create_task(pump()), asyncio.create_task(listen())]
+    try:
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        for task in tasks:
+            task.cancel()
+        # The screencast is left running so a reconnect resumes instantly; the
+        # frames are dropped by the bounded queue rather than piling up.
+
+
+@router.websocket("/ws/builds/{build_id}")
+async def build_stream(websocket: WebSocket, build_id: str) -> None:
+    """Live build output, then the outcome.
+
+    Replays the transcript first so a viewer that connects late — or reconnects —
+    still sees the whole build rather than joining mid-sentence.
+    """
+    if not _authorized(websocket):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+
+    manager = websocket.app.state.builds
+    build = manager.get(build_id)
+    if build is None:
+        row = manager.row(build_id)
+        if row is None:
+            await websocket.send_json({"type": "error", "message": "build not found"})
+            await websocket.close()
+            return
+        log_path = manager.root / build_id / "build.log"
+        if log_path.is_file():
+            for line in log_path.read_text(errors="replace").splitlines():
+                await websocket.send_json({"type": "log", "stream": "stdout", "line": line})
+        await websocket.send_json(
+            {"type": "exit", "id": build_id, "status": row.get("status"), "exit_code": row.get("exit_code")}
+        )
+        await websocket.close()
+        return
+
+    for line in build.transcript():
+        await websocket.send_json({"type": "log", "stream": "stdout", "line": line})
+
+    subscriber = build.subscribe()
+    try:
+        while True:
+            while True:
+                try:
+                    message = subscriber.get_nowait()
+                except queue.Empty:
+                    break
+                await websocket.send_json(message)
+                if message.get("type") == "exit":
+                    return
+            # Yield to the loop; the subscriber queue is fed by the reader thread.
+            await asyncio.sleep(0.15)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        build.unsubscribe(subscriber)

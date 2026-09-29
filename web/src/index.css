@@ -1,12 +1,65 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens.
+ *
+ * Everything visual resolves through these, and the light theme redefines the
+ * same names — so a component never needs to know which theme it is in. Tokens
+ * are grouped by what they are for rather than by colour value, because that is
+ * the question a component is actually asking ("what is a border?"), and it is
+ * what makes a second theme possible without touching components.
+ */
 @theme {
-  --color-surface: #0b0d12;
-  --color-panel: #12151d;
-  --color-panel-hover: #171b25;
-  --color-border: #232936;
-  --color-muted: #8b93a7;
-  --color-accent: #4f8cff;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Surfaces, back to front. */
+  --color-surface: #0a0c11;
+  --color-panel: #10131a;
+  --color-panel-hover: #161a23;
+  --color-elevated: #1a1f29;
+
+  /* Lines and text. */
+  --color-border: #1f2531;
+  --color-border-strong: #2c3441;
+  --color-text: #e7ebf2;
+  --color-muted: #8a93a6;
+  --color-subtle: #5c667a;
+
+  /* Intent. One accent, plus states that must never be confused with it. */
+  --color-accent: #5b8cff;
+  --color-accent-hover: #6f9bff;
+  --color-accent-soft: #5b8cff1a;
+  --color-success: #3fb950;
+  --color-warning: #d29922;
+  --color-danger: #f85149;
+
+  /* Shape. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Motion. Short enough to feel responsive, long enough to read as motion. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+}
+
+/* Light theme: the same names, restated. */
+:root[data-theme="light"] {
+  --color-surface: #f7f8fa;
+  --color-panel: #ffffff;
+  --color-panel-hover: #f2f4f7;
+  --color-elevated: #ffffff;
+  --color-border: #e3e6ec;
+  --color-border-strong: #cfd4dd;
+  --color-text: #12151c;
+  --color-muted: #616b7d;
+  --color-subtle: #8b94a5;
+  --color-accent: #2f6bff;
+  --color-accent-hover: #1f57e0;
+  --color-accent-soft: #2f6bff14;
 }
 
 html,
@@ -18,13 +71,29 @@ body,
 body {
   margin: 0;
   background: var(--color-surface);
-  color: #e6e9ef;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/*
+ * Tabular figures in anything numeric — sizes, hashes, counts, timers — so
+ * digits line up and a value updating in place does not shift sideways.
+ */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .scrollbar-none {
@@ -33,4 +102,68 @@ body {
 
 .scrollbar-none::-webkit-scrollbar {
   display: none;
+}
+
+/* A thin scrollbar that does not shout, for panels with long content. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 4px;
+}
+
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Panels and dialogs fade in rather than appearing. */
+@keyframes fenox-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-in {
+  animation: fenox-in var(--duration-base) var(--ease-out);
+}
+
+@keyframes fenox-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.animate-pulse-soft {
+  animation: fenox-pulse 1.6s ease-in-out infinite;
 }

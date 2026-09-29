@@ -80,7 +80,7 @@ export function DeviceDetailPage() {
       <Tabs
         tabs={[
           { id: "overview", label: "Overview", icon: <Info size={16} />, render: () => <OverviewPanel device={device} /> },
-          { id: "web", label: "Web", icon: <Globe size={16} />, render: () => <WebPanel device={device} /> },
+          { id: "web", label: "Web", icon: <Globe size={16} />, render: () => <WebPanel /> },
           { id: "screen", label: "Remote control", icon: <MonitorSmartphone size={16} />, render: () => <ScreenInputPanel device={device} /> },
           { id: "apps", label: "Apps", icon: <AppWindow size={16} />, render: () => <AppsPanel device={device} /> },
           { id: "files", label: "Files", icon: <FolderOpen size={16} />, render: () => <FilesPanel device={device} /> },

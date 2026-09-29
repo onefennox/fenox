@@ -3,7 +3,13 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
+// Self-hosted fonts: one fewer third-party request, and the same thing renders
+// offline, which matters for a tool that runs on a machine with no internet.
+import "@fontsource-variable/inter";
+import "@fontsource-variable/jetbrains-mono";
+
 import App from "./App";
+import { Toaster } from "./components/Toaster";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -23,6 +29,7 @@ createRoot(document.getElementById("root") as HTMLElement).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <App />
+        <Toaster />
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

@@ -9,7 +9,11 @@ import type {
   DeviceInfo,
   DeviceList,
   ConnectionFinding,
+  BrowserStatus,
+  Build,
+  BuildList,
   ConnectionReport,
+  QualityResult,
   DirListing,
   DiscoverResult,
   DoctorReport,
@@ -31,6 +35,9 @@ export const keys = {
   telemetry: (id: string) => ["telemetry", id] as const,
   system: ["system"] as const,
   connection: ["connection"] as const,
+  browser: ["browser"] as const,
+  builds: ["builds"] as const,
+  build: (id: string) => ["build", id] as const,
   browse: (path?: string) => ["browse", path ?? "~"] as const,
   projects: ["projects"] as const,
   project: (id: string) => ["project", id] as const,
@@ -213,6 +220,7 @@ export const getDoctor = () => api.get<DoctorReport>("/api/system/doctor");
 export const browseDirs = (path?: string) =>
   api.get<DirListing>(`/api/system/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`);
 export const getConnection = () => api.get<ConnectionReport>("/api/system/connection");
+export const getBrowser = () => api.get<BrowserStatus>("/api/browser");
 export const repairConnection = (id: string) =>
   api.post<{
     id: string;
@@ -228,3 +236,25 @@ export const repairConnection = (id: string) =>
   );
 
 export const getTools = () => api.get<ToolsReport>("/api/system/tools");
+
+// -- builds -----------------------------------------------------------------
+
+export const listBuilds = (project?: string) =>
+  api.get<BuildList>(`/api/builds${project ? `?project=${encodeURIComponent(project)}` : ""}`);
+export const startBuild = (project: string, kind: string) =>
+  api.post<Build>(`/api/projects/${encodeURIComponent(project)}/builds`, { kind });
+export const getBuild = (id: string) => api.get<Build>(`/api/builds/${id}`);
+export const cancelBuild = (id: string) => api.post<{ cancelled: boolean }>(`/api/builds/${id}/cancel`);
+export const deleteBuild = (id: string) => api.delete<void>(`/api/builds/${id}`);
+export const buildLog = (id: string) =>
+  api.get<{ lines: string[]; live: boolean }>(`/api/builds/${id}/log`);
+export const artifactUrl = (id: string) => `/api/builds/${id}/artifact`;
+
+// -- project quality --------------------------------------------------------
+
+export const getQualityActions = (project: string) =>
+  api.get<{ actions: Array<{ id: string; label: string; hint: string }> }>(
+    `/api/projects/${encodeURIComponent(project)}/quality`,
+  );
+export const runQuality = (project: string, action: string) =>
+  api.post<QualityResult>(`/api/projects/${encodeURIComponent(project)}/quality`, { action });

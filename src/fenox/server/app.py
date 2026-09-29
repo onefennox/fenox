@@ -15,13 +15,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..core import adb, devices
+from ..core import adb, browser, builds, devices
 from ..core.auth import AuthStore
 from ..core.config import Store
 from ..core.sessions import SessionManager
 from ..version import __version__
 from . import ws as ws_routes
 from .routes import auth as auth_routes
+from .routes import browser as browser_routes
+from .routes import builds as build_routes
 from .routes import devices as device_routes
 from .routes import files as file_routes
 from .routes import mirror as mirror_routes
@@ -65,6 +67,8 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
                 pass
         app.state.sessions = SessionManager(app.state.store)
         app.state.mirrors = {}
+        app.state.browser = browser.manager(app.state.store.paths.data / "browser")
+        app.state.builds = builds.BuildManager(app.state.store, app.state.store.paths.data)
         app.state.serving = {
             "reach": app.state.store.settings.get("reach"),
             "port": app.state.store.settings.get("port"),
@@ -74,6 +78,7 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
             yield
         finally:
             app.state.watcher.stop()
+            app.state.builds.shutdown()
             app.state.sessions.shutdown()
             for session in list(app.state.mirrors.values()):
                 session.stop()
@@ -96,6 +101,8 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
     app.include_router(file_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(mirror_routes.router)
+    app.include_router(browser_routes.router)
+    app.include_router(build_routes.router)
     app.include_router(ws_routes.router)
 
     web_dir = _bundled_web_dir()

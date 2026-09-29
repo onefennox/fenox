@@ -1,141 +1,195 @@
-import { ExternalLink, Globe, RotateCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, ExternalLink, Globe, Monitor, RefreshCw, Smartphone, Tablet } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { Device } from "@/api/types";
-import { Button, Card, Input } from "@/components/ui";
+import { getBrowser, keys } from "@/api/queries";
+import { Button, Card, ErrorText, Input } from "@/components/ui";
 
-/** Turn whatever was typed into something loadable. */
-function normalise(raw: string): string {
-  const value = raw.trim();
-  if (!value) return "";
-  if (/^https?:\/\//i.test(value)) return value;
-  // Looks like a hostname rather than a search term.
-  if (/^[\w.-]+\.[a-z]{2,}([/:?#]|$)/i.test(value)) return `https://${value}`;
-  return `https://duckduckgo.com/?q=${encodeURIComponent(value)}`;
-}
+const DEVICE_ICONS: Record<string, React.ReactNode> = {
+  desktop: <Monitor size={14} />,
+  laptop: <Monitor size={14} />,
+  tablet: <Tablet size={14} />,
+  mobile: <Smartphone size={14} />,
+};
 
 /**
- * A browser panel for the device page.
+ * A real browser, shown in the page.
  *
- * The page is embedded in an iframe so it uses *this* browser's cookies and
- * logins rather than starting a fresh session. That is the whole point, and also
- * the limitation: a great many sites send `X-Frame-Options: DENY` or a
- * `frame-ancestors` policy and will simply refuse to load. That refusal cannot
- * be detected reliably from JavaScript, so rather than pretend, the panel says
- * so up front and offers to open the address in a real tab, where anything loads.
+ * The frames come from a Chrome the hub runs and drives over the DevTools
+ * Protocol, not from an iframe. That is what makes every site work: nothing is
+ * embedded, so no site can refuse to be framed, and switching between desktop,
+ * tablet and mobile changes the actual viewport, pixel ratio and touch flag —
+ * so the site serves the layout it would serve that device.
+ *
+ * Coordinates map 1:1 because the stream is sized to the emulated viewport, so a
+ * point on the canvas is the same point in the page.
  */
-export function WebPanel({ device }: { device: Device }) {
-  const storageKey = `fenox.web.${device.id}`;
-  const [input, setInput] = useState("");
+export function WebPanel() {
+  const status = useQuery({ queryKey: keys.browser, queryFn: getBrowser });
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const socket = useRef<WebSocket | null>(null);
   const [url, setUrl] = useState("");
-  const [nonce, setNonce] = useState(0);
-  const [showNotice, setShowNotice] = useState(false);
-  const frame = useRef<HTMLIFrameElement>(null);
+  const [input, setInput] = useState("");
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState("");
+  const [size, setSize] = useState({ width: 0, height: 0 });
 
-  // Remember the last address per device, so returning to the tab resumes where
-  // it was rather than showing an empty box.
+  const send = useCallback((message: Record<string, unknown>) => {
+    if (socket.current?.readyState === WebSocket.OPEN) {
+      socket.current.send(JSON.stringify(message));
+    }
+  }, []);
+
   useEffect(() => {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) {
-      setUrl(saved);
-      setInput(saved);
-    }
-  }, [storageKey]);
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${protocol}://${window.location.host}/ws/browser`);
+    ws.binaryType = "blob";
+    socket.current = ws;
 
-  const go = (raw: string) => {
-    const target = normalise(raw);
-    if (!target) return;
-    setUrl(target);
-    setInput(target);
-    setNonce((count) => count + 1);
-    setShowNotice(true); // most sites refuse framing; say so rather than leave a blank panel
-    try {
-      localStorage.setItem(storageKey, target);
-    } catch {
-      // Private mode or a full quota: remembering is a convenience, not a requirement.
-    }
+    ws.onmessage = async (event) => {
+      if (typeof event.data === "string") {
+        const message = JSON.parse(event.data);
+        if (message.type === "error") setError(message.message);
+        return;
+      }
+      // A frame. Decoded off the main thread, then painted.
+      const bitmap = await createImageBitmap(event.data as Blob);
+      const target = canvas.current;
+      if (target) {
+        if (target.width !== bitmap.width || target.height !== bitmap.height) {
+          target.width = bitmap.width;
+          target.height = bitmap.height;
+          setSize({ width: bitmap.width, height: bitmap.height });
+        }
+        target.getContext("2d")?.drawImage(bitmap, 0, 0);
+      }
+      bitmap.close();
+      setReady(true);
+    };
+    ws.onerror = () => setError("Could not reach the browser stream.");
+    return () => ws.close();
+  }, []);
+
+  // Tell the server which device to emulate; it reloads so the layout is real.
+  const changeDevice = (next: string) => {
+    send({ t: "device", v: next });
+    status.refetch();
   };
+
+  const point = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    // The frame is the emulated viewport, so this is a direct proportion.
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * size.width,
+      y: ((event.clientY - rect.top) / rect.height) * size.height,
+    };
+  };
+
+  const current = status.data?.device ?? "desktop";
 
   return (
     <div className="space-y-3">
       <form
-        className="flex gap-2"
+        className="flex flex-wrap gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          go(input);
+          send({ t: "navigate", v: input });
+          setUrl(input);
         }}
       >
         <Input
           value={input}
           onChange={(event) => setInput(event.target.value)}
-          placeholder="example.com — or a search"
+          placeholder="control-center.paylesa.com"
           aria-label="Address"
           spellCheck={false}
           autoComplete="off"
+          className="min-w-48 flex-1"
         />
         <Button type="submit" className="shrink-0">
           <Globe size={14} />
           Go
         </Button>
+        <Button type="button" variant="ghost" title="Back" className="shrink-0" onClick={() => send({ t: "back" })}>
+          <ArrowLeft size={14} />
+        </Button>
+        <Button type="button" variant="ghost" title="Reload" className="shrink-0" onClick={() => send({ t: "reload" })}>
+          <RefreshCw size={14} />
+        </Button>
+      </form>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {status.data?.devices.map((entry) => (
+          <Button
+            key={entry.id}
+            type="button"
+            variant={current === entry.id ? "primary" : "secondary"}
+            className="shrink-0"
+            onClick={() => changeDevice(entry.id)}
+            title={`${entry.width}×${entry.height}`}
+          >
+            {DEVICE_ICONS[entry.id]}
+            {entry.label}
+          </Button>
+        ))}
+        <span className="ml-1 text-xs text-[var(--color-muted)]">
+          {size.width ? `${size.width}×${size.height}` : ""}
+        </span>
         {url ? (
           <Button
             type="button"
             variant="ghost"
-            className="shrink-0"
-            title="Reload"
-            onClick={() => {
-              setNonce((count) => count + 1);
-              setShowNotice(true);
-            }}
-          >
-            <RotateCw size={14} />
-          </Button>
-        ) : null}
-      </form>
-
-      {showNotice && url ? (
-        <Card className="flex flex-wrap items-center gap-3 p-3 text-xs text-[var(--color-muted)]">
-          <span className="min-w-0 flex-1">
-            Some sites refuse to be shown inside another page. If this stays blank, open it in a real
-            tab — it will work there.
-          </span>
-          <Button
-            type="button"
-            variant="secondary"
-            className="shrink-0"
-            onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+            className="ml-auto shrink-0"
+            onClick={() => window.open(url.startsWith("http") ? url : `https://${url}`, "_blank", "noopener,noreferrer")}
           >
             <ExternalLink size={14} />
             Open in a tab
           </Button>
-        </Card>
+        ) : null}
+      </div>
+
+      {error ? <ErrorText>{error}</ErrorText> : null}
+      {status.data && !status.data.available ? (
+        <ErrorText>
+          No Chrome or Chromium was found on the machine running Fenox. Install one to use this tab.
+        </ErrorText>
       ) : null}
 
-      {url ? (
-        <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-white">
-          <iframe
-            // A fresh key per navigation so the frame is recreated rather than
-            // relying on the browser to honour a same-URL reload.
-            key={`${url}#${nonce}`}
-            ref={frame}
-            src={url}
-            title="Web"
-            className="h-[70vh] w-full border-0 bg-white"
-            // Same-origin is not needed and only narrows what loads; the panel
-            // never reads the document, it only displays it.
-            sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
-            referrerPolicy="no-referrer-when-downgrade"
-          />
-        </div>
-      ) : (
-        <Card className="p-8 text-center text-sm text-[var(--color-muted)]">
-          <Globe size={20} className="mx-auto mb-3 opacity-60" />
-          Type an address above to browse here, using this browser's own logins.
-          <div className="mt-2 text-xs">
-            Sites that block embedding — Google, most banks — will need the “open in a tab” button.
-          </div>
-        </Card>
-      )}
+      <div
+        className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-white"
+        // Typing goes to the page rather than the dashboard; only printable keys
+        // and a few controls are forwarded.
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === "Backspace" || event.key === "Tab") {
+            event.preventDefault();
+            send({ t: "key", v: event.key });
+          } else if (event.key.length === 1 && !event.metaKey && !event.ctrlKey) {
+            send({ t: "text", v: event.key });
+          }
+        }}
+      >
+        <canvas
+          ref={canvas}
+          className="block w-full cursor-pointer bg-white"
+          style={{ maxHeight: "70vh", objectFit: "contain" }}
+          onClick={(event) => {
+            const { x, y } = point(event);
+            send({ t: "click", x, y });
+          }}
+          onWheel={(event) => {
+            const { x, y } = point(event);
+            send({ t: "scroll", x, y, dy: event.deltaY, dx: event.deltaX });
+          }}
+        />
+        {!ready ? (
+          <Card className="border-0 p-8 text-center text-sm text-[var(--color-muted)]">
+            <Globe size={20} className="mx-auto mb-3 opacity-60" />
+            Starting a browser…
+            <div className="mt-2 text-xs">Type an address above. First start takes a few seconds.</div>
+          </Card>
+        ) : null}
+      </div>
     </div>
   );
 }

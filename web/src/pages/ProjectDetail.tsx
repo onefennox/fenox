@@ -1,11 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ChevronLeft,
+  FolderCog,
+  Hammer,
+  Info,
+  Play,
+  ShieldCheck,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { getProject, keys, listDevices, startBatchRun, startRun, updateProject } from "@/api/queries";
+import {
+  getProject,
+  keys,
+  listBuilds,
+  listDevices,
+  startBatchRun,
+  startRun,
+  updateProject,
+} from "@/api/queries";
 import type { Project } from "@/api/types";
 import { PathField } from "@/components/FolderPicker";
-import { Badge, Button, Card, ErrorText, Field, Input, Modal, Spinner } from "@/components/ui";
+import { BuildStatus } from "@/components/builds";
+import { Tabs } from "@/components/Tabs";
+import { Badge, Button, Card, ErrorText, Field, Input, Modal, Select, SkeletonRows } from "@/components/ui";
+import { timeAgo } from "@/lib/format";
+import { BuildsPanel } from "./project/BuildsPanel";
+import { QualityPanel } from "./project/QualityPanel";
 
 export function ProjectDetailPage() {
   const { name = "" } = useParams();
@@ -15,6 +36,7 @@ export function ProjectDetailPage() {
 
   const project = useQuery({ queryKey: keys.project(projectId), queryFn: () => getProject(projectId) });
   const devices = useQuery({ queryKey: keys.devices, queryFn: listDevices });
+  const builds = useQuery({ queryKey: keys.builds, queryFn: () => listBuilds(projectId) });
 
   const online = (devices.data?.devices ?? []).filter((device) => device.online && !device.disabled);
   const [device, setDevice] = useState("");
@@ -22,9 +44,7 @@ export function ProjectDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
 
   useEffect(() => {
-    if (!device && online.length > 0) {
-      setDevice(online[0].id);
-    }
+    if (!device && online.length > 0) setDevice(online[0].id);
   }, [device, online]);
 
   const start = useMutation({
@@ -42,7 +62,7 @@ export function ProjectDetailPage() {
     },
   });
   const save = useMutation({
-    mutationFn: (patch: Partial<Project>) => updateProject(projectId, patch),
+    mutationFn: (patch: Partial<Project> & { backend_path?: string }) => updateProject(projectId, patch),
     onSuccess: () => {
       setEditOpen(false);
       queryClient.invalidateQueries({ queryKey: keys.project(projectId) });
@@ -54,96 +74,154 @@ export function ProjectDetailPage() {
   });
 
   if (project.isLoading) {
-    return <Spinner label="Loading project" />;
+    return (
+      <Card className="p-4">
+        <SkeletonRows rows={4} />
+      </Card>
+    );
   }
   if (project.error || !project.data) {
-    return <p className="text-sm text-red-400">{(project.error as Error | null)?.message ?? "Project not found."}</p>;
+    return <ErrorText>{(project.error as Error | null)?.message ?? "Project not found."}</ErrorText>;
   }
 
   const entry = project.data.project;
+  const projectBuilds = builds.data?.builds ?? [];
+  const running = projectBuilds.filter((build) => build.status === "running").length;
+  const last = projectBuilds[0];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
-        <Link to="/projects" className="text-xs text-[var(--color-muted)] hover:text-white">
-          &larr; Projects
+        <Link
+          to="/projects"
+          className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] transition-colors hover:text-[var(--color-text)]"
+        >
+          <ChevronLeft size={13} />
+          Projects
         </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <h1 className="text-lg font-semibold text-white">{projectId}</h1>
+        <div className="mt-1.5 flex flex-wrap items-center gap-2.5">
+          <h1 className="text-lg font-semibold tracking-tight">{projectId}</h1>
           {entry.package ? <Badge tone="accent">{entry.package}</Badge> : null}
+          {running ? <Badge tone="accent">{running} building</Badge> : null}
         </div>
-        <p className="mt-1 text-sm text-[var(--color-muted)]">{entry.path}</p>
+        <p className="mt-0.5 truncate font-mono text-xs text-[var(--color-subtle)]">{entry.path}</p>
       </div>
 
-      <Card className="p-5">
-        <h2 className="mb-4 text-sm font-semibold text-white">Run</h2>
-        <div className="flex flex-wrap items-end gap-3">
-          <Field label="Device">
-            <select
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-white"
-              value={device}
-              onChange={(event) => setDevice(event.target.value)}
-            >
-              {online.length === 0 ? <option value="">No devices online</option> : null}
-              {online.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.id}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Mode">
-            <select
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-white"
-              value={mode}
-              onChange={(event) => setMode(event.target.value as "local" | "remote")}
-            >
-              <option value="local">Local</option>
-              <option value="remote">Remote</option>
-            </select>
-          </Field>
-          <Button disabled={!device || start.isPending} onClick={() => start.mutate()}>
-            {start.isPending ? "Starting…" : "Run"}
-          </Button>
-          <Button variant="secondary" disabled={online.length === 0 || batch.isPending} onClick={() => batch.mutate()}>
-            {batch.isPending ? "Starting…" : `Run on all (${online.length})`}
-          </Button>
-        </div>
-        <ErrorText>{(start.error as Error | null)?.message ?? (batch.error as Error | null)?.message}</ErrorText>
-      </Card>
-
-      <Card className="p-5">
-        <h2 className="mb-1 text-sm font-semibold text-white">Backend URLs</h2>
-        <p className="mb-4 text-xs text-[var(--color-muted)]">
-          Used by <span className="text-white">local</span> and{" "}
-          <span className="text-white">production</span> runs respectively. Change them here rather than
-          editing the project.
-        </p>
-        <BackendUrls
-          local={entry.api_local}
-          production={entry.api_remote ?? ""}
-          saving={urls.isPending}
-          error={(urls.error as Error | null)?.message}
-          onSave={(patch) => urls.mutate(patch)}
-        />
-      </Card>
-
-      <Card className="p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-white">Configuration</h2>
-          <Button variant="ghost" onClick={() => setEditOpen(true)}>
-            Edit project
-          </Button>
-        </div>
-        <dl className="grid grid-cols-1 gap-x-8 gap-y-2 text-sm sm:grid-cols-2">
-          <ConfigRow label="Port" value={entry.port} />
-          <ConfigRow label="Package" value={entry.package ?? "—"} />
-          <ConfigRow label="Local socket" value={entry.socket_local ?? "—"} />
-          <ConfigRow label="Remote socket" value={entry.socket_remote ?? "—"} />
-          <ConfigRow label="Backend" value={entry.backend ? `${entry.backend.cmd} (${entry.backend.path})` : "—"} />
-          <ConfigRow label="Extra ports" value={entry.additional_ports?.join(", ") || "—"} />
-        </dl>
-      </Card>
+      <Tabs
+        tabs={[
+          {
+            id: "overview",
+            label: "Overview",
+            icon: <Info size={15} />,
+            render: () => <OverviewPanel entry={entry} last={last} buildCount={projectBuilds.length} />,
+          },
+          {
+            id: "builds",
+            label: "Builds",
+            icon: <Hammer size={15} />,
+            badge: running ? <Badge tone="accent">{running}</Badge> : undefined,
+            render: () => <BuildsPanel project={projectId} />,
+          },
+          {
+            id: "quality",
+            label: "Quality",
+            icon: <ShieldCheck size={15} />,
+            render: () => <QualityPanel project={projectId} />,
+          },
+          {
+            id: "run",
+            label: "Run",
+            icon: <Play size={15} />,
+            render: () => (
+              <Card className="p-4">
+                <h2 className="text-sm font-semibold">Run on a device</h2>
+                <p className="mt-0.5 mb-3 text-xs text-[var(--color-muted)]">
+                  Builds, installs and attaches to the Dart VM so reload and restart work.
+                </p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <Field label="Device">
+                    <Select value={device} onChange={(event) => setDevice(event.target.value)} disabled={!online.length}>
+                      {online.length === 0 ? <option value="">No devices online</option> : null}
+                      {online.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.id}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Backend">
+                    <Select value={mode} onChange={(event) => setMode(event.target.value as "local" | "remote")}>
+                      <option value="local">Local</option>
+                      <option value="remote">Production</option>
+                    </Select>
+                  </Field>
+                  <Button disabled={!device || start.isPending} onClick={() => start.mutate()}>
+                    <Play size={14} />
+                    {start.isPending ? "Starting…" : "Run"}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={online.length === 0 || batch.isPending}
+                    onClick={() => batch.mutate()}
+                  >
+                    Run on all ({online.length})
+                  </Button>
+                </div>
+                <ErrorText>
+                  {(start.error as Error | null)?.message ?? (batch.error as Error | null)?.message}
+                </ErrorText>
+                {online.length === 0 ? (
+                  <p className="mt-3 text-xs text-[var(--color-subtle)]">
+                    No device is online. Plug one in, or connect over wireless debugging.
+                  </p>
+                ) : null}
+              </Card>
+            ),
+          },
+          {
+            id: "settings",
+            label: "Settings",
+            icon: <FolderCog size={15} />,
+            render: () => (
+              <div className="space-y-4">
+                <Card className="p-4">
+                  <h2 className="mb-1 text-sm font-semibold">Backend URLs</h2>
+                  <p className="mb-3 text-xs text-[var(--color-muted)]">
+                    Injected at build and run time. A release build pointing at localhost ships an app that talks to
+                    nothing.
+                  </p>
+                  <BackendUrls
+                    local={entry.api_local}
+                    production={entry.api_remote ?? ""}
+                    saving={urls.isPending}
+                    error={(urls.error as Error | null)?.message}
+                    onSave={(patch) => urls.mutate(patch)}
+                  />
+                </Card>
+                <Card className="p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 className="text-sm font-semibold">Project</h2>
+                    <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>
+                      Edit project
+                    </Button>
+                  </div>
+                  <dl className="grid grid-cols-1 gap-x-8 gap-y-1.5 text-sm sm:grid-cols-2">
+                    <ConfigRow label="Package" value={entry.package ?? "—"} />
+                    <ConfigRow label="Port" value={entry.port} />
+                    <ConfigRow label="Local socket" value={entry.socket_local ?? "—"} />
+                    <ConfigRow label="Remote socket" value={entry.socket_remote ?? "—"} />
+                    <ConfigRow
+                      label="Backend"
+                      value={entry.backend ? `${entry.backend.cmd} (${entry.backend.path})` : "—"}
+                    />
+                    <ConfigRow label="Extra ports" value={entry.additional_ports?.join(", ") || "—"} />
+                  </dl>
+                </Card>
+              </div>
+            ),
+          },
+        ]}
+      />
 
       {editOpen ? (
         <EditProjectModal
@@ -158,13 +236,63 @@ export function ProjectDetailPage() {
   );
 }
 
+/** A compact summary: what it is, and what happened last. */
+function OverviewPanel({
+  entry,
+  last,
+  buildCount,
+}: {
+  entry: Project;
+  last?: { status: "running" | "succeeded" | "failed" | "cancelled"; artifact_name: string; started_at: string };
+  buildCount: number;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <Card className="p-4 lg:col-span-2">
+        <h2 className="mb-3 text-sm font-semibold">Project</h2>
+        <dl className="grid grid-cols-1 gap-x-8 gap-y-1.5 text-sm sm:grid-cols-2">
+          <ConfigRow label="Package" value={entry.package ?? "—"} />
+          <ConfigRow label="Port" value={entry.port} />
+          <ConfigRow label="Local API" value={entry.api_local || "—"} />
+          <ConfigRow label="Production API" value={entry.api_remote ?? "—"} />
+        </dl>
+        <p className="mt-3 font-mono text-[11px] break-all text-[var(--color-subtle)]">{entry.path}</p>
+      </Card>
+
+      <div className="space-y-4">
+        <Card className="p-4">
+          <h2 className="mb-2 text-sm font-semibold">Last build</h2>
+          {last ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm">{last.artifact_name || "—"}</span>
+                <BuildStatus status={last.status} />
+              </div>
+              <p className="text-xs text-[var(--color-subtle)]">{timeAgo(last.started_at)}</p>
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--color-muted)]">Nothing built yet.</p>
+          )}
+        </Card>
+
+        <Card className="p-4">
+          <h2 className="mb-2 text-sm font-semibold">At a glance</h2>
+          <div className="space-y-1.5 text-sm">
+            <ConfigRow label="Builds" value={String(buildCount)} />
+            <ConfigRow label="Extra ports" value={entry.additional_ports?.join(", ") || "—"} />
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 /**
  * The two backend URLs, editable in place.
  *
- * These are the fields that change most often and that a wrong value breaks
- * silently — a run against the wrong backend just fails to load data. They get
- * their own panel on the page rather than living behind a dialog, so they are
- * somewhere to go when a run points at the wrong place.
+ * These change most often and a wrong value breaks silently — the app runs and
+ * talks to the wrong server — so they get their own panel rather than living
+ * behind a dialog.
  */
 function BackendUrls({
   local,
@@ -181,7 +309,6 @@ function BackendUrls({
 }) {
   const [values, setValues] = useState({ api_local: local, api_remote: production });
 
-  // Follow the server when it changes elsewhere, without stomping on typing.
   useEffect(() => {
     setValues({ api_local: local, api_remote: production });
   }, [local, production]);
@@ -193,10 +320,7 @@ function BackendUrls({
       className="space-y-3"
       onSubmit={(event) => {
         event.preventDefault();
-        onSave({
-          api_local: values.api_local.trim(),
-          api_remote: values.api_remote.trim(),
-        });
+        onSave({ api_local: values.api_local.trim(), api_remote: values.api_remote.trim() });
       }}
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -216,20 +340,21 @@ function BackendUrls({
         </Field>
       </div>
       <div className="flex items-center gap-2">
-        <Button type="submit" disabled={saving || !dirty}>
+        <Button type="submit" size="sm" disabled={saving || !dirty}>
           {saving ? "Saving…" : "Save URLs"}
         </Button>
-        {dirty ? <span className="text-xs text-[var(--color-muted)]">Unsaved changes</span> : null}
+        {dirty ? <span className="text-xs text-[var(--color-subtle)]">Unsaved changes</span> : null}
       </div>
       <ErrorText>{error}</ErrorText>
     </form>
   );
 }
 
-function ConfigRow({ label, value }: { label: string; value: string }) {  return (
-    <div className="flex justify-between border-b border-[var(--color-border)] py-1.5">
-      <dt className="text-[var(--color-muted)]">{label}</dt>
-      <dd className="truncate pl-4 text-right text-white">{value}</dd>
+function ConfigRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b border-[var(--color-border)] py-1.5 last:border-0">
+      <dt className="shrink-0 text-[var(--color-muted)]">{label}</dt>
+      <dd className="truncate text-right text-[var(--color-text)]">{value}</dd>
     </div>
   );
 }
@@ -262,8 +387,24 @@ function EditProjectModal({
   });
 
   return (
-    <Modal title="Edit project" onClose={onClose} wide>
+    <Modal
+      title="Edit project"
+      description="How this project is found, run and built."
+      onClose={onClose}
+      size="lg"
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" form="edit-project" disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </>
+      }
+    >
       <form
+        id="edit-project"
         className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
@@ -282,31 +423,33 @@ function EditProjectModal({
           onChange={(path) => setForm({ ...form, path })}
           browseTitle="Choose the Flutter project folder"
         />
-        <Field label="Port">
-          <Input value={form.port} onChange={(event) => setForm({ ...form, port: event.target.value })} />
-        </Field>
-        <Field label="Local socket URL">
-          <Input value={form.socket_local} onChange={(event) => setForm({ ...form, socket_local: event.target.value })} />
-        </Field>
-        <Field label="Remote socket URL">
-          <Input value={form.socket_remote} onChange={(event) => setForm({ ...form, socket_remote: event.target.value })} />
-        </Field>
-        <PathField
-          label="Backend folder"
-          value={form.backend_path}
-          onChange={(backend_path) => setForm({ ...form, backend_path })}
-          placeholder="Detected from the project"
-          browseTitle="Choose the backend folder"
-        />
-        <ErrorText>{error}</ErrorText>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={saving}>
-            Save
-          </Button>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Port">
+            <Input value={form.port} onChange={(event) => setForm({ ...form, port: event.target.value })} />
+          </Field>
+          <PathField
+            label="Backend folder"
+            value={form.backend_path}
+            onChange={(backend_path) => setForm({ ...form, backend_path })}
+            placeholder="Detected from the project"
+            browseTitle="Choose the backend folder"
+          />
         </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Local socket URL">
+            <Input
+              value={form.socket_local}
+              onChange={(event) => setForm({ ...form, socket_local: event.target.value })}
+            />
+          </Field>
+          <Field label="Remote socket URL">
+            <Input
+              value={form.socket_remote}
+              onChange={(event) => setForm({ ...form, socket_remote: event.target.value })}
+            />
+          </Field>
+        </div>
+        <ErrorText>{error}</ErrorText>
       </form>
     </Modal>
   );

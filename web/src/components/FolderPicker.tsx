@@ -38,7 +38,7 @@ export function FolderPicker({
   const listing = data;
 
   return (
-    <Modal title={title} onClose={onClose} wide>
+    <Modal title={title} onClose={onClose} size="lg">
       <div className="space-y-3">
         <div className="flex gap-2">
           <Input

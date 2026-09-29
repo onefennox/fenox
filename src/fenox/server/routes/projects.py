@@ -1,12 +1,14 @@
 """Flutter project registry."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
-from ...core import projects
+from ...core import flutter, projects
 from ..security import require_owner
 
 router = APIRouter(prefix="/api/projects", tags=["projects"], dependencies=[Depends(require_owner)])
@@ -133,3 +135,45 @@ def scan_projects(request: Request, body: ScanRequest | None = None) -> dict:
         raise HTTPException(status_code=422, detail="no projects directory configured")
     found = projects.scan(store, base)
     return {"added": [name for name, _ in found], "projects": store.projects()}
+
+
+class QualityRequest(BaseModel):
+    action: str
+
+
+@router.get("/{project_id}/quality")
+def quality_actions(project_id: str) -> dict:
+    """The checks available for a project.
+
+    `project_id` is not used — the catalogue is global — but it stays in the path
+    so this cannot be shadowed by `/{project_id}`, which is registered above it.
+    """
+    return {
+        "actions": [
+            {"id": key, "label": spec["label"], "hint": spec["hint"]}
+            for key, spec in flutter.QUALITY_ACTIONS.items()
+        ]
+    }
+
+
+@router.post("/{project_id}/quality")
+async def run_quality(request: Request, project_id: str, body: QualityRequest) -> dict:
+    """Run one check and return its output.
+
+    Executed off the event loop: `flutter test` can take minutes, and blocking
+    the loop would freeze every other request including the device streams.
+    """
+    store = request.app.state.store
+    entry = store.project(project_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    if body.action not in flutter.QUALITY_ACTIONS:
+        raise HTTPException(status_code=422, detail=f"unknown action: {body.action}")
+
+    binary = flutter.resolve(store.settings.get("flutter_path"), entry.get("path"))
+    if not binary:
+        raise HTTPException(status_code=409, detail="the flutter SDK was not found; set it in Settings")
+
+    started = time.time()
+    ok, output = await run_in_threadpool(flutter.run_action, binary, entry, body.action)
+    return {"action": body.action, "ok": ok, "output": output, "seconds": round(time.time() - started, 1)}

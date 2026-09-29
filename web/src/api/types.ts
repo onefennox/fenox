@@ -271,3 +271,61 @@ export interface ConnectionReport {
   usbipd: { relevant: boolean; installed: boolean; version: string };
   adb_version: string;
 }
+
+export interface BrowserDevice {
+  id: string;
+  label: string;
+  width: number;
+  height: number;
+}
+
+export interface BrowserStatus {
+  available: boolean;
+  running: boolean;
+  url: string;
+  device: string;
+  error: string;
+  devices: BrowserDevice[];
+}
+
+/** One build run and the artifact it produced. */
+export interface Build {
+  id: string;
+  project: string;
+  kind: string;
+  label: string;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  started_at: string;
+  ended_at: string;
+  exit_code: number | null;
+  artifact: string;
+  artifact_name: string;
+  artifact_size: number;
+  artifact_sha256: string;
+  error: string;
+  path: string;
+}
+
+export interface BuildKind {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+export interface BuildList {
+  builds: Build[];
+  kinds: BuildKind[];
+}
+
+export interface QualityAction {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+export interface QualityResult {
+  action: string;
+  ok: boolean;
+  output: string;
+  seconds: number;
+}
