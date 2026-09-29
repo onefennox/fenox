@@ -1,70 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info, MoreHorizontal, Power, Search, Square, Trash2, Upload, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { appInfo, clearApp, installApp, keys, launchApp, listApps, stopApp, uninstallApp } from "@/api/queries";
 import type { Device } from "@/api/types";
+import { Menu } from "@/components/Menu";
 import { Button, Card, EmptyState, ErrorText, Input, Modal, SegmentedControl, SkeletonRows } from "@/components/ui";
-import { cn } from "@/lib/format";
 import { toast } from "@/lib/toast";
 
 type Scope = "user" | "all";
 
-/** Row actions behind a menu, so six buttons do not crowd every package. */
+/** Package actions, behind the shared Menu so the scroll container cannot clip them. */
 function AppMenu({ onAction, busy }: { onAction: (action: string) => void; busy: boolean }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
-
-  const item = (id: string, label: string, Icon: typeof Info, danger = false) => (
-    <button
-      key={id}
-      onClick={(event) => {
-        event.stopPropagation();
-        setOpen(false);
-        onAction(id);
-      }}
-      className={cn(
-        "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors",
-        danger
-          ? "text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
-          : "text-[var(--color-muted)] hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]",
-      )}
-    >
-      <Icon size={13} />
-      {label}
-    </button>
-  );
-
   return (
-    <div className="relative shrink-0" ref={ref} onClick={(event) => event.stopPropagation()}>
-      <button
-        disabled={busy}
-        onClick={() => setOpen((current) => !current)}
-        aria-label="App actions"
-        className="cursor-pointer rounded-[var(--radius-sm)] p-1.5 text-[var(--color-subtle)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)] disabled:opacity-40"
-      >
-        <MoreHorizontal size={15} />
-      </button>
-      {open ? (
-        <div className="animate-in absolute right-0 z-40 mt-1 w-40 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-panel)] py-1 shadow-xl">
-          {item("open", "Open", Power)}
-          {item("stop", "Force stop", Square)}
-          {item("clear", "Clear data", Trash2)}
-          {item("info", "Info", Info)}
-          <div className="my-1 border-t border-[var(--color-border)]" />
-          {item("uninstall", "Uninstall", Trash2, true)}
-        </div>
-      ) : null}
-    </div>
+    <Menu
+      label="App actions"
+      buttonSize="icon"
+      buttonClassName="text-[var(--color-subtle)]"
+      widthClass="w-40"
+      disabled={busy}
+      items={[
+        { id: "open", label: "Open", icon: <Power size={13} />, onSelect: () => onAction("open") },
+        { id: "stop", label: "Force stop", icon: <Square size={13} />, onSelect: () => onAction("stop") },
+        { id: "clear", label: "Clear data", icon: <Trash2 size={13} />, onSelect: () => onAction("clear") },
+        { id: "info", label: "Info", icon: <Info size={13} />, onSelect: () => onAction("info") },
+        { id: "uninstall", label: "Uninstall", icon: <Trash2 size={13} />, danger: true, onSelect: () => onAction("uninstall") },
+      ]}
+    >
+      <MoreHorizontal size={15} />
+    </Menu>
   );
 }
 

@@ -5,7 +5,7 @@ import type {
   ReactNode,
   SelectHTMLAttributes,
 } from "react";
-import { useEffect, useId } from "react";
+import { forwardRef, useEffect, useId } from "react";
 
 import { cn } from "@/lib/format";
 
@@ -31,15 +31,16 @@ const BUTTON_SIZES: Record<ButtonSize, string> = {
   icon: "h-8 w-8 justify-center",
 };
 
-export function Button({
-  variant = "primary",
-  size = "md",
-  className = "",
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize }) {
+// forwardRef so a primitive that needs to measure the button (the menu, which
+// positions its panel against it) can attach a ref.
+export const Button = forwardRef<
+  HTMLButtonElement,
+  ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize }
+>(function Button({ variant = "primary", size = "md", className = "", ...props }, ref) {
   return (
     <button
       {...props}
+      ref={ref}
       className={cn(
         "inline-flex cursor-pointer items-center rounded-[var(--radius-md)] font-medium whitespace-nowrap",
         "transition-colors duration-[var(--duration-fast)] disabled:cursor-not-allowed",
@@ -49,7 +50,7 @@ export function Button({
       )}
     />
   );
-}
+});
 
 /* ------------------------------------------------------------------- input */
 

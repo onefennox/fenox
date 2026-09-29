@@ -11,9 +11,9 @@ import {
   ChevronRight,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
 
 import { artifactUrl, cancelBuild, deleteBuild, installBuild, keys, listDevices, startBuild } from "@/api/queries";
+import { Menu } from "@/components/Menu";
 import type { Build, BuildKind } from "@/api/types";
 import { Badge } from "@/components/ui";
 import { useActiveDevice } from "@/hooks/useActiveDevice";
@@ -117,17 +117,6 @@ export function BuildLauncher({
 export function InstallButton({ build, compact = false }: { build: Build; compact?: boolean }) {
   const devices = useQuery({ queryKey: keys.devices, queryFn: listDevices, refetchInterval: 10000 });
   const { activeId } = useActiveDevice();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
 
   const install = useMutation({
     mutationFn: (device: string) => installBuild(build.id, device),
@@ -147,48 +136,34 @@ export function InstallButton({ build, compact = false }: { build: Build; compac
   }
 
   const online = (devices.data?.devices ?? []).filter((device) => device.online && !device.disabled);
-  const ordered = activeId && online.some((d) => d.id === activeId)
+  // The active device first: "put this on the phone I am already using" is the
+  // common case, and making people pick from a list every time taxes it.
+  const ordered = activeId
     ? [...online].sort((a, b) => (a.id === activeId ? -1 : b.id === activeId ? 1 : 0))
     : online;
 
   return (
-    <div className="relative shrink-0" ref={ref}>
-      <button
-        disabled={install.isPending || online.length === 0}
-        onClick={() => setOpen((current) => !current)}
-        title={online.length === 0 ? "No device is online" : "Install on a device"}
-        className={cn(
-          "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 text-xs font-medium transition-colors",
-          "hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-panel-hover)] disabled:cursor-not-allowed disabled:opacity-40",
-        )}
-      >
-        {install.isPending ? <Loader2 size={12} className="animate-spin" /> : <Smartphone size={12} />}
-        {compact ? "" : install.isPending ? "Installing…" : "Install"}
-      </button>
-      {open ? (
-        <div className="animate-in absolute right-0 bottom-full z-40 mb-1 w-56 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-panel)] py-1 shadow-xl">
-          <p className="px-3 py-1 text-[10px] font-semibold tracking-wider text-[var(--color-subtle)] uppercase">
-            Install on
-          </p>
-          {ordered.map((device) => (
-            <button
-              key={device.id}
-              onClick={() => {
-                setOpen(false);
-                install.mutate(device.id);
-              }}
-              className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
-            >
-              <Smartphone size={12} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{device.id}</span>
-              {device.id === activeId ? (
-                <span className="shrink-0 text-[10px] text-[var(--color-accent)]">active</span>
-              ) : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
+    <Menu
+      label="Install on a device"
+      header="Install on"
+      title={online.length === 0 ? "No device is online" : "Install on a device"}
+      buttonVariant="secondary"
+      widthClass="w-56"
+      disabled={install.isPending || online.length === 0}
+      items={ordered.map((device) => ({
+        id: device.id,
+        label: device.id,
+        icon: <Smartphone size={12} />,
+        trailing:
+          device.id === activeId ? (
+            <span className="text-[10px] text-[var(--color-accent)]">active</span>
+          ) : undefined,
+        onSelect: () => install.mutate(device.id),
+      }))}
+    >
+      {install.isPending ? <Loader2 size={12} className="animate-spin" /> : <Smartphone size={12} />}
+      {compact ? "" : install.isPending ? "Installing…" : "Install"}
+    </Menu>
   );
 }
 

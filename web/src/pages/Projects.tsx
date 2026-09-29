@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
@@ -30,6 +30,7 @@ import {
 } from "@/api/queries";
 import type { Build, Project } from "@/api/types";
 import { FolderPicker } from "@/components/FolderPicker";
+import { Menu } from "@/components/Menu";
 import { BuildStatus } from "@/components/builds";
 import {
   Badge,
@@ -51,17 +52,6 @@ import { toast } from "@/lib/toast";
 /** Build actions for one project, behind a button so the row stays a row. */
 function BuildMenu({ project, disabled }: { project: string; disabled?: boolean }) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
 
   const build = useMutation({
     mutationFn: (kind: string) => startBuild(project, kind),
@@ -72,42 +62,28 @@ function BuildMenu({ project, disabled }: { project: string; disabled?: boolean 
     onError: (error: Error) => toast.error("Could not start the build", error.message),
   });
 
-  const item = (kind: string, label: string, hint: string) => (
-    <button
-      key={kind}
-      onClick={() => {
-        setOpen(false);
-        build.mutate(kind);
-      }}
-      className="flex w-full cursor-pointer items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-panel-hover)]"
-    >
-      <Hammer size={13} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
-      <span className="min-w-0">
-        <span className="block text-sm text-[var(--color-text)]">{label}</span>
-        <span className="block text-[10px] text-[var(--color-subtle)]">{hint}</span>
-      </span>
-    </button>
-  );
+  const item = (kind: string, label: string, hint: string) => ({
+    id: kind,
+    label,
+    hint,
+    icon: <Hammer size={13} className="text-[var(--color-accent)]" />,
+    onSelect: () => build.mutate(kind),
+  });
 
   return (
-    <div className="relative" ref={ref} onClick={(event) => event.preventDefault()}>
-      <Button
-        size="sm"
-        variant="secondary"
-        disabled={disabled || build.isPending}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <Hammer size={13} />
-        {build.isPending ? "Starting…" : "Build"}
-      </Button>
-      {open ? (
-        <div className="animate-in absolute right-0 z-40 mt-1 w-56 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-panel)] py-1 shadow-xl">
-          {item("apk-debug", "Debug APK", "Fastest, for a phone in your hand")}
-          {item("apk-release", "Release APK", "Installable by anyone")}
-          {item("aab-release", "Release AAB", "The format Google Play accepts")}
-        </div>
-      ) : null}
-    </div>
+    <Menu
+      label={`Build ${project}`}
+      buttonVariant="secondary"
+      disabled={disabled || build.isPending}
+      items={[
+        item("apk-debug", "Debug APK", "Fastest, for a phone in your hand"),
+        item("apk-release", "Release APK", "Installable by anyone"),
+        item("aab-release", "Release AAB", "The format Google Play accepts"),
+      ]}
+    >
+      <Hammer size={13} />
+      {build.isPending ? "Starting…" : "Build"}
+    </Menu>
   );
 }
 
@@ -124,18 +100,6 @@ function ProjectRow({
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [menu, setMenu] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menu) return;
-    const onDown = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setMenu(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [menu]);
-
   const pin = useMutation({
     mutationFn: (next: boolean) => updateProject(name, { pinned: next }),
     onSuccess: (_result, next) => {
@@ -193,49 +157,36 @@ function ProjectRow({
           Open
         </Button>
 
-        <div className="relative" ref={ref}>
-          <button
-            onClick={() => setMenu((current) => !current)}
-            aria-label="Project actions"
-            className="cursor-pointer rounded-[var(--radius-sm)] p-1.5 text-[var(--color-subtle)] transition-colors hover:bg-[var(--color-panel)] hover:text-[var(--color-text)]"
-          >
-            <MoreHorizontal size={15} />
-          </button>
-          {menu ? (
-            <div className="animate-in absolute right-0 z-40 mt-1 w-44 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-panel)] py-1 shadow-xl">
-              <button
-                onClick={() => {
-                  setMenu(false);
-                  pin.mutate(!project.pinned);
-                }}
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
-              >
-                {project.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-                {project.pinned ? "Unpin" : "Pin to top"}
-              </button>
-              <button
-                onClick={() => {
-                  setMenu(false);
-                  open();
-                }}
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
-              >
-                <Settings2 size={13} />
-                Configure
-              </button>
-              <button
-                onClick={() => {
-                  setMenu(false);
-                  onRemove();
-                }}
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10"
-              >
-                <Trash2 size={13} />
-                Remove
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <Menu
+          label={`Actions for ${name}`}
+          buttonVariant="ghost"
+          buttonSize="icon"
+          buttonClassName="text-[var(--color-subtle)]"
+          widthClass="w-44"
+          items={[
+            {
+              id: "pin",
+              label: project.pinned ? "Unpin" : "Pin to top",
+              icon: project.pinned ? <PinOff size={13} /> : <Pin size={13} />,
+              onSelect: () => pin.mutate(!project.pinned),
+            },
+            {
+              id: "configure",
+              label: "Configure",
+              icon: <Settings2 size={13} />,
+              onSelect: open,
+            },
+            {
+              id: "remove",
+              label: "Remove",
+              icon: <Trash2 size={13} />,
+              danger: true,
+              onSelect: onRemove,
+            },
+          ]}
+        >
+          <MoreHorizontal size={15} />
+        </Menu>
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, ChevronRight, RefreshCw, Wifi } from "lucide-react";
+import { Cable, ChevronRight, Globe, RefreshCw, Wifi } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -16,7 +16,9 @@ import type { Device } from "@/api/types";
 import { ConnectionPanel, PairingPrompt } from "@/components/ConnectionPanel";
 import { Badge, Button, Card, ErrorText, Field, Input, Spinner, StatusDot } from "@/components/ui";
 
-type Method = "usb" | "wireless";
+// Three cases, because they need different instructions and different
+// controls: a cable, a shared network, or a phone that is somewhere else.
+type Method = "usb" | "network" | "remote";
 
 function Steps({ items }: { items: string[] }) {
   return (
@@ -31,7 +33,7 @@ function Steps({ items }: { items: string[] }) {
 export function ConnectPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [method, setMethod] = useState<Method>("wireless");
+  const [method, setMethod] = useState<Method>("network");
   const [pair, setPair] = useState({ ip: "", port: "", code: "" });
   const [address, setAddress] = useState({ ip: "", port: "" });
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -40,7 +42,10 @@ export function ConnectPage() {
   const tools = useQuery({ queryKey: ["tools"], queryFn: getTools });
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: keys.devices });
-  const scan = useMutation({ mutationFn: () => discoverDevices(method), onSuccess: refresh });
+  const scan = useMutation({
+    mutationFn: () => discoverDevices(method === "usb" ? "usb" : "wireless"),
+    onSuccess: refresh,
+  });
   const connect = useMutation({ mutationFn: connectDevice, onSuccess: refresh });
   const doPair = useMutation({
     mutationFn: () => pairDevice(pair.ip.trim(), pair.port.trim(), pair.code.trim()),
@@ -62,6 +67,81 @@ export function ConnectPage() {
   const unauthorized = pending.filter((item) => item.state === "unauthorized");
   const discoveredUnpaired = (scan.data?.pending ?? []).filter((item) => item.ip);
   const openDevice = (id: string) => navigate(`/devices/${encodeURIComponent(id)}`);
+
+  /* Both wireless cases end in the same two forms — pair, then connect — so they
+     share one definition rather than drifting apart as the page is edited. */
+  const pairAndConnect = (
+    <div className="space-y-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-4">
+      <div className="space-y-3">
+        <p className="text-xs text-[var(--color-muted)]">
+          <span className="font-medium text-[var(--color-text)]">Pair a new phone.</span> The pairing port and code are
+          on the phone's “Pair device with pairing code” screen.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <Field label="Phone address">
+            <Input
+              value={pair.ip}
+              onChange={(event) => setPair({ ...pair, ip: event.target.value })}
+              placeholder="192.168.1.20"
+            />
+          </Field>
+          <Field label="Pairing port">
+            <Input
+              value={pair.port}
+              onChange={(event) => setPair({ ...pair, port: event.target.value })}
+              placeholder="41234"
+            />
+          </Field>
+          <Field label="Code">
+            <Input
+              value={pair.code}
+              onChange={(event) => setPair({ ...pair, code: event.target.value })}
+              placeholder="123456"
+            />
+          </Field>
+        </div>
+        <Button
+          variant="secondary"
+          onClick={() => doPair.mutate()}
+          disabled={doPair.isPending || !pair.ip || !pair.port || !pair.code}
+        >
+          {doPair.isPending ? "Pairing…" : "Pair phone"}
+        </Button>
+        <ErrorText>{(doPair.error as Error | null)?.message}</ErrorText>
+      </div>
+
+      <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
+        <p className="text-xs text-[var(--color-muted)]">
+          <span className="font-medium text-[var(--color-text)]">Already paired?</span> Connect using the IP and port on
+          the main Wireless debugging screen — the connection port, not the pairing one.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <Field label="Phone address">
+            <Input
+              value={address.ip}
+              onChange={(event) => setAddress({ ...address, ip: event.target.value })}
+              placeholder="192.168.1.20"
+            />
+          </Field>
+          <Field label="Connection port">
+            <Input
+              value={address.port}
+              onChange={(event) => setAddress({ ...address, port: event.target.value })}
+              placeholder="37001"
+            />
+          </Field>
+        </div>
+        <Button
+          variant="secondary"
+          onClick={() => doConnect.mutate()}
+          disabled={doConnect.isPending || !address.ip || !address.port}
+        >
+          {doConnect.isPending ? "Connecting…" : "Connect"}
+        </Button>
+        <ErrorText>{(doConnect.error as Error | null)?.message}</ErrorText>
+      </div>
+    </div>
+  );
 
   const diagnostic = (() => {
     if (!tools.data) return null;
@@ -88,35 +168,45 @@ export function ConnectPage() {
       <PairingPrompt />
 
       <Card className="space-y-5 p-4">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button
-            onClick={() => setMethod("usb")}
-            className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-left text-sm transition ${
-              method === "usb"
-                ? "border-[var(--color-accent)] bg-[var(--color-panel-hover)] text-[var(--color-text)]"
-                : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
-            }`}
-          >
-            <Cable size={18} />
-            <span>
-              <span className="block font-medium">USB debugging</span>
-              <span className="text-xs text-[var(--color-muted)]">Needs a cable; on WSL also a USB bridge</span>
-            </span>
-          </button>
-          <button
-            onClick={() => setMethod("wireless")}
-            className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-left text-sm transition ${
-              method === "wireless"
-                ? "border-[var(--color-accent)] bg-[var(--color-panel-hover)] text-[var(--color-text)]"
-                : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
-            }`}
-          >
-            <Wifi size={18} />
-            <span>
-              <span className="block font-medium">Wireless debugging</span>
-              <span className="text-xs text-[var(--color-muted)]">Nothing to install — works the same everywhere</span>
-            </span>
-          </button>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {(
+            [
+              {
+                id: "usb" as const,
+                icon: <Cable size={18} />,
+                label: "This computer",
+                hint: "A cable into the machine running Fenox",
+              },
+              {
+                id: "network" as const,
+                icon: <Wifi size={18} />,
+                label: "Same network",
+                hint: "Phone and this machine on one Wi-Fi",
+              },
+              {
+                id: "remote" as const,
+                icon: <Globe size={18} />,
+                label: "Somewhere else",
+                hint: "A phone that is not here — a client's",
+              },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.id}
+              onClick={() => setMethod(option.id)}
+              className={`flex cursor-pointer items-start gap-3 rounded-[var(--radius-lg)] border p-3 text-left text-sm transition-colors ${
+                method === option.id
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-text)]"
+                  : "border-[var(--color-border)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)]"
+              }`}
+            >
+              <span className="mt-0.5 shrink-0">{option.icon}</span>
+              <span className="min-w-0">
+                <span className="block font-medium">{option.label}</span>
+                <span className="block text-xs text-[var(--color-muted)]">{option.hint}</span>
+              </span>
+            </button>
+          ))}
         </div>
 
         {method === "usb" ? (
@@ -132,12 +222,14 @@ export function ConnectPage() {
               {scan.isPending ? "Scanning…" : "Scan for USB devices"}
             </Button>
           </div>
-        ) : (
+        ) : null}
+
+        {method === "network" ? (
           <div className="space-y-4">
             <Steps
               items={[
                 "On the phone: turn on Wireless debugging in Developer options.",
-                "Keep the phone on the same network as this computer.",
+                "Keep the phone on the same Wi-Fi as this computer.",
                 "If the phone has never been paired here, tap “Pair device with pairing code” and enter the details below.",
               ]}
             />
@@ -146,63 +238,34 @@ export function ConnectPage() {
                 {scan.isPending ? "Searching…" : "Find phones on network"}
               </Button>
               <Button variant="ghost" onClick={() => setShowAdvanced((open) => !open)}>
-                {showAdvanced ? "Hide manual options" : "Manual options"}
+                {showAdvanced ? "Hide pairing" : "Pair a phone"}
               </Button>
             </div>
-
-            {showAdvanced ? (
-              <div className="space-y-4 rounded-lg border border-[var(--color-border)] p-4">
-                <div className="space-y-3">
-                  <p className="text-xs text-[var(--color-muted)]">
-                    Pair a new phone. The pairing port and code are on the “Pair device with pairing code” screen.
-                  </p>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                    <Field label="IP address">
-                      <Input value={pair.ip} onChange={(event) => setPair({ ...pair, ip: event.target.value })} placeholder="192.168.1.20" />
-                    </Field>
-                    <Field label="Pairing port">
-                      <Input value={pair.port} onChange={(event) => setPair({ ...pair, port: event.target.value })} placeholder="41234" />
-                    </Field>
-                    <Field label="Code">
-                      <Input value={pair.code} onChange={(event) => setPair({ ...pair, code: event.target.value })} placeholder="123456" />
-                    </Field>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    onClick={() => doPair.mutate()}
-                    disabled={doPair.isPending || !pair.ip || !pair.port || !pair.code}
-                  >
-                    Pair phone
-                  </Button>
-                  <ErrorText>{(doPair.error as Error | null)?.message}</ErrorText>
-                </div>
-
-                <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
-                  <p className="text-xs text-[var(--color-muted)]">
-                    Already paired? Connect directly using the IP and port on the main Wireless debugging screen (not the
-                    pairing port).
-                  </p>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                    <Field label="IP address">
-                      <Input value={address.ip} onChange={(event) => setAddress({ ...address, ip: event.target.value })} placeholder="192.168.1.20" />
-                    </Field>
-                    <Field label="Connection port">
-                      <Input value={address.port} onChange={(event) => setAddress({ ...address, port: event.target.value })} placeholder="37001" />
-                    </Field>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    onClick={() => doConnect.mutate()}
-                    disabled={doConnect.isPending || !address.ip || !address.port}
-                  >
-                    Connect
-                  </Button>
-                  <ErrorText>{(doConnect.error as Error | null)?.message}</ErrorText>
-                </div>
-              </div>
-            ) : null}
+            {showAdvanced ? pairAndConnect : null}
           </div>
-        )}
+        ) : null}
+
+        {method === "remote" ? (
+          <div className="space-y-4">
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-muted)]">
+              <p className="font-medium text-[var(--color-text)]">The phone has to be able to reach this machine.</p>
+              <p className="mt-1">
+                Wireless debugging makes the phone dial <em>out</em> to the adb server, so nothing needs forwarding here
+                — but the two must share a network. On a different Wi-Fi, the simplest route is a VPN like Tailscale on
+                both. Automatic discovery does not cross networks, so pairing is entered by hand.
+              </p>
+            </div>
+            <Steps
+              items={[
+                "On the phone: turn on Wireless debugging in Developer options.",
+                "Give the phone a route to this machine — the same Wi-Fi, or a VPN both are on.",
+                "On the phone tap “Pair device with pairing code”. It shows a pairing port and a six-digit code.",
+                "Enter those below. Use the phone's address on that shared network, not its Wi-Fi address.",
+              ]}
+            />
+            {pairAndConnect}
+          </div>
+        ) : null}
       </Card>
 
       <Card className="overflow-hidden">

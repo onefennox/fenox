@@ -11,11 +11,12 @@ import {
   Wifi,
   Cable,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { connectDevice, deleteDevice, keys, listDevices, updateDevice } from "@/api/queries";
 import type { Device } from "@/api/types";
+import { Menu } from "@/components/Menu";
 import { PhoneFrame } from "@/components/PhoneFrame";
 import { useActiveDevice } from "@/hooks/useActiveDevice";
 import {
@@ -45,7 +46,7 @@ function initialView(): View {
   }
 }
 
-/** A row action that hides behind a menu, so the row stays uncluttered. */
+/** Row actions, behind the shared Menu so nothing clips them. */
 function RowMenu({
   device,
   onRename,
@@ -57,62 +58,25 @@ function RowMenu({
   onRemove: () => void;
   onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
-
   return (
-    <div className="relative" ref={ref} onClick={(event) => event.stopPropagation()}>
-      <button
-        onClick={() => setOpen((current) => !current)}
-        aria-label="Actions"
-        className="cursor-pointer rounded-[var(--radius-sm)] p-1.5 text-[var(--color-subtle)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
-      >
-        <MoreHorizontal size={15} />
-      </button>
-      {open ? (
-        <div className="animate-in absolute right-0 z-40 mt-1 w-44 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-panel)] py-1 shadow-xl">
-          <button
-            onClick={() => {
-              setOpen(false);
-              onRename();
-            }}
-            className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
-          >
-            <Pencil size={13} />
-            Rename
-          </button>
-          <button
-            onClick={() => {
-              setOpen(false);
-              onToggle();
-            }}
-            className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
-          >
-            <Power size={13} />
-            {device.disabled ? "Enable" : "Disable"}
-          </button>
-          <button
-            onClick={() => {
-              setOpen(false);
-              onRemove();
-            }}
-            className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10"
-          >
-            <Trash2 size={13} />
-            Remove
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <Menu
+      label={`Actions for ${device.id}`}
+      buttonSize="icon"
+      buttonClassName="text-[var(--color-subtle)]"
+      widthClass="w-44"
+      items={[
+        { id: "rename", label: "Rename", icon: <Pencil size={13} />, onSelect: onRename },
+        {
+          id: "toggle",
+          label: device.disabled ? "Enable" : "Disable",
+          icon: <Power size={13} />,
+          onSelect: onToggle,
+        },
+        { id: "remove", label: "Remove", icon: <Trash2 size={13} />, danger: true, onSelect: onRemove },
+      ]}
+    >
+      <MoreHorizontal size={15} />
+    </Menu>
   );
 }
 
