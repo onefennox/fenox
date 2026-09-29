@@ -39,7 +39,7 @@ export function DeviceDetailPage() {
   if (!device) {
     return (
       <div className="space-y-4">
-        <Link to="/devices" className="text-xs text-[var(--color-muted)] hover:text-white">
+        <Link to="/devices" className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]">
           &larr; Devices
         </Link>
         <Card className="p-6 text-sm text-[var(--color-muted)]">This device is no longer registered.</Card>
@@ -50,7 +50,7 @@ export function DeviceDetailPage() {
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-[var(--color-border)] bg-gradient-to-r from-[var(--color-panel)] to-[var(--color-surface)] p-3 sm:p-4">
-        <Link to="/devices" className="mb-2 inline-flex text-xs text-[var(--color-muted)] hover:text-white">
+        <Link to="/devices" className="mb-2 inline-flex text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]">
           &larr; All devices
         </Link>
         <div className="flex flex-wrap items-center gap-4">
@@ -60,7 +60,7 @@ export function DeviceDetailPage() {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <StatusDot online={device.online} disabled={device.disabled} />
-              <h1 className="truncate text-xl font-semibold tracking-tight text-white">{device.id}</h1>
+              <h1 className="truncate text-xl font-semibold tracking-tight text-[var(--color-text)]">{device.id}</h1>
               {device.online ? <Badge tone="accent">Online</Badge> : <Badge tone="warn">Offline</Badge>}
             </div>
             <p className="mt-1 truncate text-sm text-[var(--color-muted)]">
@@ -74,7 +74,7 @@ export function DeviceDetailPage() {
             </Button>
           ) : null}
         </div>
-        {connect.error ? <p className="mt-3 text-xs text-red-400">{(connect.error as Error).message}</p> : null}
+        {connect.error ? <p className="mt-3 text-xs text-[var(--color-danger)]">{(connect.error as Error).message}</p> : null}
       </div>
 
       <Tabs

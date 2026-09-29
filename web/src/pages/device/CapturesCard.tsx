@@ -78,7 +78,7 @@ export function CapturesCard() {
                     className="shrink-0 text-[var(--color-subtle)] opacity-0 transition-opacity group-hover:opacity-100"
                   />
                 </div>
-                <span className="tnum absolute top-1.5 right-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[9px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+                <span className="tnum absolute top-1.5 right-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[9px] text-[var(--color-text)] opacity-0 transition-opacity group-hover:opacity-100">
                   {timeAgo(capture.at)}
                 </span>
               </a>

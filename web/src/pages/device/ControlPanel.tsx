@@ -17,11 +17,11 @@ export function ControlPanel({ device }: { device: Device }) {
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <Card className="space-y-3 p-5">
-        <h2 className="text-sm font-semibold text-white">Power state</h2>
+      <Card className="space-y-3 p-4">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Power state</h2>
         <div className="flex items-center gap-2">
           <select
-            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-white"
+            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)]"
             value={rebootMode}
             onChange={(event) => setRebootMode(event.target.value)}
           >
@@ -35,8 +35,8 @@ export function ControlPanel({ device }: { device: Device }) {
         </div>
       </Card>
 
-      <Card className="space-y-3 p-5">
-        <h2 className="text-sm font-semibold text-white">Radios</h2>
+      <Card className="space-y-3 p-4">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Radios</h2>
         <div className="flex flex-wrap gap-2">
           {(["wifi", "data", "bluetooth"] as const).map((service) => (
             <div key={service} className="flex gap-1">
@@ -51,8 +51,8 @@ export function ControlPanel({ device }: { device: Device }) {
         </div>
       </Card>
 
-      <Card className="space-y-4 p-5">
-        <h2 className="text-sm font-semibold text-white">Volume and brightness</h2>
+      <Card className="space-y-4 p-4">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Volume and brightness</h2>
         <Field label={`Volume ${volume}`}>
           <input type="range" min={0} max={100} value={volume} onChange={(event) => setVol(Number(event.target.value))} className="w-full" />
         </Field>
@@ -74,8 +74,8 @@ export function ControlPanel({ device }: { device: Device }) {
         </Button>
       </Card>
 
-      <Card className="space-y-3 p-5">
-        <h2 className="text-sm font-semibold text-white">Shell</h2>
+      <Card className="space-y-3 p-4">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Shell</h2>
         <div className="flex gap-2">
           <Input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="getprop ro.product.model" />
           <Button

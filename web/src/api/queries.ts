@@ -119,7 +119,8 @@ export const readClipboard = (id: string) => api.get<{ clipboard: string }>(`${d
 export const writeClipboard = (id: string, text: string) =>
   api.post<{ ok: boolean }>(`${devicePath(id)}/clipboard`, { text });
 
-export const listApps = (id: string) => api.get<{ apps: string[] }>(`${devicePath(id)}/apps`);
+export const listApps = (id: string, thirdParty = true) =>
+  api.get<{ apps: string[] }>(`${devicePath(id)}/apps?third_party=${thirdParty ? "true" : "false"}`);
 export const installApp = (id: string, path: string) =>
   api.post<{ ok: boolean; detail: string }>(`${devicePath(id)}/apps/install`, { path });
 export const uninstallApp = (id: string, pkg: string) =>

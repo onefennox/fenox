@@ -29,7 +29,7 @@ function SectionTitle({ icon: Icon, title, detail }: { icon: LucideIcon; title: 
         <Icon size={18} />
       </span>
       <div>
-        <h2 className="text-sm font-semibold text-white">{title}</h2>
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">{title}</h2>
         <p className="mt-0.5 text-xs leading-5 text-[var(--color-muted)]">{detail}</p>
       </div>
     </div>
@@ -47,7 +47,7 @@ export function ScreenInputPanel({ device }: { device: Device }) {
   return (
     <div className="space-y-4">
       {!device.online ? (
-        <Card className="border-amber-500/30 p-4 text-sm text-amber-300">Connect this device to use remote controls.</Card>
+        <Card className="border-[var(--color-warning)]/40 p-4 text-sm text-[var(--color-warning)]">Connect this device to use remote controls.</Card>
       ) : null}
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-5">
@@ -95,7 +95,7 @@ export function ScreenInputPanel({ device }: { device: Device }) {
           {clipboard !== null ? (
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
               <p className="mb-1 text-[10px] font-semibold tracking-wider text-[var(--color-muted)] uppercase">Device clipboard</p>
-              <p className="break-words text-sm text-white">{clipboard || "Clipboard is empty"}</p>
+              <p className="break-words text-sm text-[var(--color-text)]">{clipboard || "Clipboard is empty"}</p>
             </div>
           ) : null}
         </Card>
@@ -112,7 +112,7 @@ export function ScreenInputPanel({ device }: { device: Device }) {
 
         <Card className="space-y-4 p-4 xl:col-span-2">
           <SectionTitle icon={Video} title="Screen recording" detail="Download a ten-second recording from the device." />
-          <a className={`inline-flex min-h-10 items-center gap-2 rounded-md bg-[var(--color-panel-hover)] px-3 py-2 text-sm font-medium text-white transition hover:bg-[var(--color-border)] ${!device.online ? "pointer-events-none opacity-50" : ""}`}
+          <a className={`inline-flex min-h-10 items-center gap-2 rounded-md bg-[var(--color-panel-hover)] px-3 py-2 text-sm font-medium text-[var(--color-text)] transition hover:bg-[var(--color-border)] ${!device.online ? "pointer-events-none opacity-50" : ""}`}
             href={`/api/devices/${encodeURIComponent(device.id)}/record?seconds=10`}>
             <Video size={16} className="text-[var(--color-accent)]" /> Record and download clip
           </a>
@@ -120,7 +120,7 @@ export function ScreenInputPanel({ device }: { device: Device }) {
       </div>
 
       <details className="group rounded-xl border border-[var(--color-border)] bg-[var(--color-panel)]">
-        <summary className="flex cursor-pointer list-none items-center gap-3 p-4 text-sm font-medium text-white">
+        <summary className="flex cursor-pointer list-none items-center gap-3 p-4 text-sm font-medium text-[var(--color-text)]">
           <span className="grid h-8 w-8 place-items-center rounded-lg bg-[var(--color-panel-hover)] text-[var(--color-muted)]"><MousePointer2 size={16} /></span>
           Coordinate controls
           <span className="ml-auto text-xs font-normal text-[var(--color-muted)]">Advanced</span>

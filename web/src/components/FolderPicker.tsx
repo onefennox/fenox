@@ -129,10 +129,10 @@ export function FolderPicker({
         )}
 
         {listing?.truncated ? (
-          <p className="text-xs text-amber-400">This folder has a lot of subfolders; only the first are shown.</p>
+          <p className="text-xs text-[var(--color-warning)]">This folder has a lot of subfolders; only the first are shown.</p>
         ) : null}
         {listing?.flutter ? (
-          <p className="text-xs text-emerald-400">This folder is a Flutter project.</p>
+          <p className="text-xs text-[var(--color-success)]">This folder is a Flutter project.</p>
         ) : null}
 
         <div className="flex justify-end gap-2">

@@ -111,7 +111,7 @@ export function DashboardPage() {
         <div className="flex gap-2">
           <Link
             to="/connect"
-            className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-accent)] px-3.5 text-sm font-medium text-white transition-colors hover:bg-[var(--color-accent-hover)]"
+            className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-accent)] px-3.5 text-sm font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-accent-hover)]"
           >
             Connect a device
           </Link>

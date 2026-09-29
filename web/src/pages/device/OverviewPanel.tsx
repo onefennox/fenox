@@ -9,7 +9,7 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between border-b border-[var(--color-border)] py-2 text-sm last:border-0">
       <span className="text-[var(--color-muted)]">{label}</span>
-      <span className="truncate pl-4 text-right text-white">{value}</span>
+      <span className="truncate pl-4 text-right text-[var(--color-text)]">{value}</span>
     </div>
   );
 }
@@ -26,8 +26,8 @@ export function OverviewPanel({ device }: { device: Device }) {
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <Card className="p-5">
-        <h2 className="mb-3 text-sm font-semibold text-white">Device</h2>
+      <Card className="p-4">
+        <h2 className="mb-3 text-sm font-semibold text-[var(--color-text)]">Device</h2>
         <Row label="Model" value={device.model ?? "Android device"} />
         <Row label="Transport" value={device.type === "wireless" ? "wireless (adb)" : device.type ?? "unknown"} />
         <Row label="Serial" value={device.serial ?? "—"} />
@@ -35,9 +35,9 @@ export function OverviewPanel({ device }: { device: Device }) {
         <Row label="State" value={device.disabled ? "disabled" : device.online ? "online" : "offline"} />
       </Card>
 
-      <Card className="p-5">
+      <Card className="p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-white">Live telemetry</h2>
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">Live telemetry</h2>
           {telemetry.isFetching ? <span className="text-xs text-[var(--color-muted)]">refreshing…</span> : null}
         </div>
         {!device.online ? (
@@ -45,7 +45,7 @@ export function OverviewPanel({ device }: { device: Device }) {
         ) : telemetry.isLoading ? (
           <Spinner />
         ) : telemetry.error ? (
-          <p className="text-sm text-red-400">{(telemetry.error as Error).message}</p>
+          <p className="text-sm text-[var(--color-danger)]">{(telemetry.error as Error).message}</p>
         ) : tele ? (
           <>
             <Row label="Battery" value={`${tele.battery}%${tele.charging ? " (charging)" : ""}`} />
@@ -60,8 +60,8 @@ export function OverviewPanel({ device }: { device: Device }) {
 
       <CapturesCard />
 
-      <Card className="p-5 lg:col-span-2">
-        <h2 className="mb-2 text-sm font-semibold text-white">Screen</h2>
+      <Card className="p-4 lg:col-span-2">
+        <h2 className="mb-2 text-sm font-semibold text-[var(--color-text)]">Screen</h2>
         <p className="text-sm text-[var(--color-muted)]">
           The live screen is shown in the device panel on the right. Select the device there to keep it in view while you work
           here.

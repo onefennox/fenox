@@ -8,7 +8,7 @@ import { useRef, useState } from "react";
 
 import { fileDownloadUrl, keys, listFiles, makeDir, removeFile, uploadFile } from "@/api/queries";
 import type { Device, FileEntry } from "@/api/types";
-import { Button, Card, ErrorText, Input, Spinner } from "@/components/ui";
+import { Button, Card, ErrorText, Input, SkeletonRows } from "@/components/ui";
 
 const LOCATIONS: Array<{ label: string; path: string; icon: LucideIcon }> = [
   { label: "Internal storage", path: "/sdcard", icon: HardDrive },
@@ -35,7 +35,7 @@ function formatSize(bytes: number): string {
 function entryIcon(entry: FileEntry) {
   if (entry.type === "dir") return <Folder size={18} className="fill-[var(--color-accent)]/15 text-[var(--color-accent)]" />;
   const extension = entry.name.split(".").pop()?.toLowerCase();
-  if (["jpg", "jpeg", "png", "gif", "webp"].includes(extension ?? "")) return <Image size={18} className="text-emerald-400" />;
+  if (["jpg", "jpeg", "png", "gif", "webp"].includes(extension ?? "")) return <Image size={18} className="text-[var(--color-success)]" />;
   if (["mp4", "mkv", "webm", "mov"].includes(extension ?? "")) return <Video size={18} className="text-violet-400" />;
   if (["mp3", "wav", "m4a", "ogg"].includes(extension ?? "")) return <Music size={18} className="text-pink-400" />;
   return <File size={18} className="text-[var(--color-muted)]" />;
@@ -104,7 +104,7 @@ export function FilesPanel({ device }: { device: Device }) {
           <p className="px-3 py-2 text-[10px] font-semibold tracking-wider text-[var(--color-muted)] uppercase">Locations</p>
           {LOCATIONS.map(({ label, path: location, icon: Icon }) => (
             <button key={location} onClick={() => navigate(location)}
-              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition ${path === location ? "bg-[var(--color-panel-hover)] text-white" : "text-[var(--color-muted)] hover:bg-[var(--color-panel-hover)] hover:text-white"}`}>
+              className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition ${path === location ? "bg-[var(--color-panel-hover)] text-[var(--color-text)]" : "text-[var(--color-muted)] hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"}`}>
               <Icon size={16} className={path === location ? "text-[var(--color-accent)]" : ""} /> {label}
             </button>
           ))}
@@ -114,30 +114,30 @@ export function FilesPanel({ device }: { device: Device }) {
           <div className="grid grid-cols-[minmax(0,1fr)_90px_140px_84px] border-b border-[var(--color-border)] px-4 py-2 text-[10px] font-semibold tracking-wider text-[var(--color-muted)] uppercase max-sm:grid-cols-[minmax(0,1fr)_72px_76px]">
             <span>Name</span><span className="text-right">Size</span><span className="text-right max-sm:hidden">Modified</span><span />
           </div>
-          {listing.isLoading ? <div className="p-6"><Spinner label="Opening folder" /></div> : listing.error ? (
-            <p className="p-5 text-sm text-amber-300">{(listing.error as Error).message}</p>
+          {listing.isLoading ? <div className="p-4"><SkeletonRows rows={5} /></div> : listing.error ? (
+            <p className="p-4 text-sm text-[var(--color-warning)]">{(listing.error as Error).message}</p>
           ) : (listing.data?.entries ?? []).length === 0 ? (
             <div className="grid min-h-72 place-items-center p-8 text-center">
-              <div><FolderOpen size={32} className="mx-auto mb-3 text-[var(--color-muted)]" /><p className="text-sm text-white">This folder is empty</p><p className="mt-1 text-xs text-[var(--color-muted)]">Upload files or create a folder to get started.</p></div>
+              <div><FolderOpen size={32} className="mx-auto mb-3 text-[var(--color-muted)]" /><p className="text-sm text-[var(--color-text)]">This folder is empty</p><p className="mt-1 text-xs text-[var(--color-muted)]">Upload files or create a folder to get started.</p></div>
             </div>
           ) : (
             <div className="max-h-[520px] divide-y divide-[var(--color-border)] overflow-y-auto">
               {(listing.data?.entries ?? []).map((entry) => (
                 <div key={entry.path} className="group grid grid-cols-[minmax(0,1fr)_90px_140px_84px] items-center px-4 py-2.5 text-sm hover:bg-[var(--color-panel-hover)] max-sm:grid-cols-[minmax(0,1fr)_72px_76px]">
                   {entry.type === "dir" ? (
-                    <button className="flex min-w-0 cursor-pointer items-center gap-3 text-left text-white" onClick={() => navigate(entry.path)}>
+                    <button className="flex min-w-0 cursor-pointer items-center gap-3 text-left text-[var(--color-text)]" onClick={() => navigate(entry.path)}>
                       {entryIcon(entry)}<span className="truncate">{entry.name}</span>
                     </button>
                   ) : (
-                    <a className="flex min-w-0 items-center gap-3 text-white" href={fileDownloadUrl(device.id, entry.path)}>
+                    <a className="flex min-w-0 items-center gap-3 text-[var(--color-text)]" href={fileDownloadUrl(device.id, entry.path)}>
                       {entryIcon(entry)}<span className="truncate">{entry.name}</span>
                     </a>
                   )}
                   <span className="text-right text-xs text-[var(--color-muted)]">{entry.type === "file" ? formatSize(entry.size) : "—"}</span>
                   <span className="text-right text-xs text-[var(--color-muted)] max-sm:hidden">{entry.modified}</span>
                   <div className="flex justify-end gap-1">
-                    {entry.type !== "dir" ? <a className="rounded-md p-2 text-[var(--color-muted)] hover:bg-[var(--color-border)] hover:text-white" title="Download" href={fileDownloadUrl(device.id, entry.path)}><Download size={15} /></a> : null}
-                    <button className="cursor-pointer rounded-md p-2 text-[var(--color-muted)] hover:bg-red-500/10 hover:text-red-400" title="Delete"
+                    {entry.type !== "dir" ? <a className="rounded-md p-2 text-[var(--color-muted)] hover:bg-[var(--color-border)] hover:text-[var(--color-text)]" title="Download" href={fileDownloadUrl(device.id, entry.path)}><Download size={15} /></a> : null}
+                    <button className="cursor-pointer rounded-md p-2 text-[var(--color-muted)] hover:bg-[var(--color-danger)]/10 hover:text-[var(--color-danger)]" title="Delete"
                       onClick={() => { if (window.confirm(`Delete ${entry.name}?`)) act.mutate(() => removeFile(device.id, entry.path)); }}><Trash2 size={15} /></button>
                   </div>
                 </div>

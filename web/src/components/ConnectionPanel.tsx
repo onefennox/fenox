@@ -7,8 +7,8 @@ import type { ConnectionFinding } from "@/api/types";
 import { Button, Card, Spinner } from "@/components/ui";
 
 const TONES = {
-  error: { border: "border-red-500/40", text: "text-red-300", icon: AlertTriangle },
-  warn: { border: "border-amber-500/40", text: "text-amber-300", icon: AlertTriangle },
+  error: { border: "border-red-500/40", text: "text-[var(--color-danger)]", icon: AlertTriangle },
+  warn: { border: "border-[var(--color-warning)]/40", text: "text-[var(--color-warning)]", icon: AlertTriangle },
   info: { border: "border-[var(--color-border)]", text: "text-[var(--color-muted)]", icon: Info },
 } as const;
 
@@ -21,9 +21,9 @@ function commandsFor(finding: ConnectionFinding): string {
 type FixState = "resolved" | "escalated" | "unchanged" | "blocked";
 
 const OUTCOME: Record<FixState, { text: string; tone: string }> = {
-  resolved: { text: "Fixed", tone: "text-emerald-300" },
-  escalated: { text: "Narrowed it down — not fixed yet", tone: "text-amber-300" },
-  unchanged: { text: "No change", tone: "text-amber-300" },
+  resolved: { text: "Fixed", tone: "text-[var(--color-success)]" },
+  escalated: { text: "Narrowed it down — not fixed yet", tone: "text-[var(--color-warning)]" },
+  unchanged: { text: "No change", tone: "text-[var(--color-warning)]" },
   blocked: { text: "This one needs you", tone: "text-[var(--color-muted)]" },
 };
 
@@ -87,7 +87,7 @@ function FindingCard({ finding }: { finding: ConnectionFinding }) {
           <span className="text-xs text-[var(--color-muted)]">No command needed — Fenox can do this one itself.</span>
         </div>
       ) : null}
-      {repair.error ? <p className="text-sm text-red-400">{(repair.error as Error).message}</p> : null}
+      {repair.error ? <p className="text-sm text-[var(--color-danger)]">{(repair.error as Error).message}</p> : null}
 
       {outcome ? (
         <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm">
@@ -117,7 +117,7 @@ export function ConnectionPanel() {
   const findings = data?.findings ?? [];
   if (!findings.length) {
     return (
-      <Card className="flex items-center gap-2 border-emerald-500/30 p-3 text-sm text-emerald-300">
+      <Card className="flex items-center gap-2 border-[var(--color-success)]/40 p-3 text-sm text-[var(--color-success)]">
         <Check size={16} />
         Nothing is blocking device connections.
       </Card>

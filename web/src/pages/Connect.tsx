@@ -76,7 +76,7 @@ export function ConnectPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold text-white">Connect a device</h1>
+        <h1 className="text-lg font-semibold tracking-tight">Connect a device</h1>
         <p className="mt-1 text-sm text-[var(--color-muted)]">
           Connect an Android phone over wireless or USB debugging. Fenox finds it and keeps it up to date.
         </p>
@@ -87,14 +87,14 @@ export function ConnectPage() {
       <ConnectionPanel />
       <PairingPrompt />
 
-      <Card className="space-y-5 p-5">
+      <Card className="space-y-5 p-4">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <button
             onClick={() => setMethod("usb")}
             className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-left text-sm transition ${
               method === "usb"
-                ? "border-[var(--color-accent)] bg-[var(--color-panel-hover)] text-white"
-                : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-white"
+                ? "border-[var(--color-accent)] bg-[var(--color-panel-hover)] text-[var(--color-text)]"
+                : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
             }`}
           >
             <Cable size={18} />
@@ -107,8 +107,8 @@ export function ConnectPage() {
             onClick={() => setMethod("wireless")}
             className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-left text-sm transition ${
               method === "wireless"
-                ? "border-[var(--color-accent)] bg-[var(--color-panel-hover)] text-white"
-                : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-white"
+                ? "border-[var(--color-accent)] bg-[var(--color-panel-hover)] text-[var(--color-text)]"
+                : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
             }`}
           >
             <Wifi size={18} />
@@ -208,11 +208,11 @@ export function ConnectPage() {
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
           <div>
-            <h2 className="text-sm font-semibold text-white">Devices</h2>
+            <h2 className="text-sm font-semibold text-[var(--color-text)]">Devices</h2>
             <p className="text-xs text-[var(--color-muted)]">Everything Fenox can see right now.</p>
           </div>
           <button
-            className="cursor-pointer text-[var(--color-muted)] hover:text-white"
+            className="cursor-pointer text-[var(--color-muted)] hover:text-[var(--color-text)]"
             onClick={() => scan.mutate()}
             disabled={scan.isPending}
             aria-label="Scan again"
@@ -252,7 +252,7 @@ export function ConnectPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <span className="text-white">{device.id}</span>
+                      <span className="text-[var(--color-text)]">{device.id}</span>
                       {device.disabled ? <Badge tone="warn">disabled</Badge> : device.online ? <Badge tone="accent">online</Badge> : <Badge tone="warn">offline</Badge>}
                     </div>
                   </td>
@@ -286,9 +286,9 @@ export function ConnectPage() {
                   <td className="px-4 py-3">
                     <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
                   </td>
-                  <td className="px-4 py-3 text-white">{item.id}</td>
+                  <td className="px-4 py-3 text-[var(--color-text)]">{item.id}</td>
                   <td className="hidden px-4 py-3 text-[var(--color-muted)] sm:table-cell">usb</td>
-                  <td className="px-4 py-3 text-amber-300" colSpan={2}>
+                  <td className="px-4 py-3 text-[var(--color-warning)]" colSpan={2}>
                     Waiting — accept the “Allow USB debugging?” prompt on the phone.
                   </td>
                 </tr>
@@ -299,9 +299,9 @@ export function ConnectPage() {
                   <td className="px-4 py-3">
                     <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
                   </td>
-                  <td className="px-4 py-3 text-white">{item.ip}</td>
+                  <td className="px-4 py-3 text-[var(--color-text)]">{item.ip}</td>
                   <td className="hidden px-4 py-3 text-[var(--color-muted)] sm:table-cell">wireless</td>
-                  <td className="px-4 py-3 text-amber-300" colSpan={2}>
+                  <td className="px-4 py-3 text-[var(--color-warning)]" colSpan={2}>
                     Found, but not paired — use Manual options above.
                   </td>
                 </tr>
@@ -312,7 +312,7 @@ export function ConnectPage() {
       </Card>
 
       {diagnostic ? (
-        <Card className="border-amber-500/30 p-3 text-sm text-amber-300">{diagnostic}</Card>
+        <Card className="border-[var(--color-warning)]/40 p-3 text-sm text-[var(--color-warning)]">{diagnostic}</Card>
       ) : null}
 
       <Card className="p-4 text-xs text-[var(--color-muted)]">

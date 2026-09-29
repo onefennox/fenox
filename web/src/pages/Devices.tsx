@@ -1,13 +1,120 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { useState } from "react";
+import {
+  LayoutGrid,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Power,
+  Rows3,
+  Smartphone,
+  Trash2,
+  Wifi,
+  Cable,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { connectDevice, deleteDevice, keys, listDevices, updateDevice } from "@/api/queries";
 import type { Device } from "@/api/types";
 import { PhoneFrame } from "@/components/PhoneFrame";
 import { useActiveDevice } from "@/hooks/useActiveDevice";
-import { Badge, Button, Card, ErrorText, Field, Input, Modal, Spinner, StatusDot } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  ErrorText,
+  Field,
+  Input,
+  Modal,
+  SegmentedControl,
+  SkeletonRows,
+  StatusDot,
+} from "@/components/ui";
+import { cn } from "@/lib/format";
+
+type View = "table" | "grid";
+
+const VIEW_KEY = "fenox.devices.view";
+
+function initialView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "grid" ? "grid" : "table";
+  } catch {
+    return "table";
+  }
+}
+
+/** A row action that hides behind a menu, so the row stays uncluttered. */
+function RowMenu({
+  device,
+  onRename,
+  onRemove,
+  onToggle,
+}: {
+  device: Device;
+  onRename: () => void;
+  onRemove: () => void;
+  onToggle: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref} onClick={(event) => event.stopPropagation()}>
+      <button
+        onClick={() => setOpen((current) => !current)}
+        aria-label="Actions"
+        className="cursor-pointer rounded-[var(--radius-sm)] p-1.5 text-[var(--color-subtle)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+      >
+        <MoreHorizontal size={15} />
+      </button>
+      {open ? (
+        <div className="animate-in absolute right-0 z-40 mt-1 w-44 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-panel)] py-1 shadow-xl">
+          <button
+            onClick={() => {
+              setOpen(false);
+              onRename();
+            }}
+            className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+          >
+            <Pencil size={13} />
+            Rename
+          </button>
+          <button
+            onClick={() => {
+              setOpen(false);
+              onToggle();
+            }}
+            className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+          >
+            <Power size={13} />
+            {device.disabled ? "Enable" : "Disable"}
+          </button>
+          <button
+            onClick={() => {
+              setOpen(false);
+              onRemove();
+            }}
+            className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger)]/10"
+          >
+            <Trash2 size={13} />
+            Remove
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function DevicesPage() {
   const queryClient = useQueryClient();
@@ -15,6 +122,7 @@ export function DevicesPage() {
   const { setActiveDevice } = useActiveDevice();
   const { data, isLoading, error } = useQuery({ queryKey: keys.devices, queryFn: listDevices });
 
+  const [view, setView] = useState<View>(initialView);
   const [renameTarget, setRenameTarget] = useState<Device | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [removeTarget, setRemoveTarget] = useState<Device | null>(null);
@@ -24,6 +132,7 @@ export function DevicesPage() {
     setActiveDevice(deviceId);
     navigate(`/devices/${encodeURIComponent(deviceId)}`);
   };
+
   const connect = useMutation({ mutationFn: connectDevice, onSuccess: refresh });
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: Partial<Device> & { name?: string } }) => updateDevice(id, patch),
@@ -31,56 +140,146 @@ export function DevicesPage() {
   });
   const remove = useMutation({ mutationFn: deleteDevice, onSuccess: refresh });
 
-  if (isLoading) {
-    return <Spinner label="Loading devices" />;
-  }
-  if (error) {
-    return <p className="text-sm text-red-400">{(error as Error).message}</p>;
-  }
+  const changeView = (next: View) => {
+    setView(next);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      // Remembering the preference is a convenience.
+    }
+  };
 
   const devices = data?.devices ?? [];
   const pending = data?.pending ?? [];
   const unauthorized = pending.filter((item) => item.state === "unauthorized");
+  const online = devices.filter((device) => device.online && !device.disabled).length;
+
+  if (error) {
+    return <ErrorText>{(error as Error).message}</ErrorText>;
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-white">Devices</h1>
-          <p className="mt-1 text-sm text-[var(--color-muted)]">
-            Your phones. Select one to view its screen and manage it.
+          <h1 className="text-lg font-semibold tracking-tight">Devices</h1>
+          <p className="mt-0.5 text-sm text-[var(--color-muted)]">
+            {devices.length === 0
+              ? "Connect a phone over USB or wireless debugging."
+              : `${online} of ${devices.length} online.`}
           </p>
         </div>
-        <Link to="/connect">
-          <Button>
-            <Plus size={16} />
-            Add device
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          {devices.length > 0 ? (
+            <SegmentedControl<View>
+              value={view}
+              onChange={changeView}
+              options={[
+                { id: "table", label: "Table", icon: <Rows3 size={13} /> },
+                { id: "grid", label: "Grid", icon: <LayoutGrid size={13} /> },
+              ]}
+            />
+          ) : null}
+          <Link to="/connect">
+            <Button size="sm">
+              <Plus size={14} />
+              Add device
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {unauthorized.length > 0 ? (
-        <Card className="border-amber-500/30 p-3 text-sm text-amber-300">
+        <Card className="border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 p-3">
           {unauthorized.map((item) => (
-            <div key={item.id}>
-              {item.id} is waiting for authorization — accept the “Allow USB debugging?” prompt on the phone.
-            </div>
+            <p key={item.id} className="text-sm text-[var(--color-warning)]">
+              {item.id} is waiting for authorisation — accept the “Allow USB debugging?” prompt on the phone.
+            </p>
           ))}
         </Card>
       ) : null}
 
-      {devices.length === 0 ? (
-        <Card className="p-10 text-center">
-          <p className="text-sm text-[var(--color-muted)]">No devices yet.</p>
-          <Link to="/connect" className="mt-3 inline-block">
-            <Button>
-              <Plus size={16} />
-              Connect a device
-            </Button>
-          </Link>
+      {isLoading ? (
+        <Card className="p-4">
+          <SkeletonRows rows={4} />
+        </Card>
+      ) : devices.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<Smartphone size={22} />}
+            title="No devices yet"
+            description="Wireless debugging needs nothing installed on this machine. USB on WSL needs the usbipd bridge once."
+            action={
+              <Link to="/connect">
+                <Button>
+                  <Plus size={14} />
+                  Connect a device
+                </Button>
+              </Link>
+            }
+          />
+        </Card>
+      ) : view === "table" ? (
+        <Card className="overflow-hidden">
+          {/* Dense rows: a table is the right shape once there are several phones. */}
+          <div className="grid grid-cols-[20px_minmax(0,1fr)_minmax(0,1fr)_90px_minmax(0,1fr)_36px] items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-[10px] font-semibold tracking-wider text-[var(--color-subtle)] uppercase max-md:grid-cols-[20px_minmax(0,1fr)_90px_36px]">
+            <span />
+            <span>Device</span>
+            <span className="max-md:hidden">Model</span>
+            <span>Transport</span>
+            <span className="max-md:hidden">Address</span>
+            <span />
+          </div>
+          <div className="divide-y divide-[var(--color-border)]">
+            {devices.map((device) => (
+              <div
+                key={device.id}
+                onClick={() => openDevice(device.id)}
+                className="grid cursor-pointer grid-cols-[20px_minmax(0,1fr)_minmax(0,1fr)_90px_minmax(0,1fr)_36px] items-center gap-3 px-3 py-2.5 transition-colors hover:bg-[var(--color-panel-hover)] max-md:grid-cols-[20px_minmax(0,1fr)_90px_36px]"
+              >
+                <StatusDot online={device.online} disabled={device.disabled} />
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className={cn("truncate text-sm font-medium", device.disabled && "text-[var(--color-subtle)]")}>
+                    {device.id}
+                  </span>
+                  {!device.online && !device.disabled ? (
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        connect.mutate(device.id);
+                      }}
+                      disabled={connect.isPending}
+                      className="shrink-0 cursor-pointer rounded-full border border-[var(--color-accent)]/40 px-1.5 py-0.5 text-[10px] text-[var(--color-accent)] transition-colors hover:bg-[var(--color-accent-soft)]"
+                    >
+                      Connect
+                    </button>
+                  ) : null}
+                </div>
+                <span className="truncate text-sm text-[var(--color-muted)] max-md:hidden">
+                  {device.model ?? "Android device"}
+                </span>
+                <Badge tone={device.type === "wireless" ? "accent" : "default"}>
+                  {device.type === "wireless" ? <Wifi size={10} /> : device.type === "usb" ? <Cable size={10} /> : null}
+                  {device.type ?? "—"}
+                </Badge>
+                <span className="truncate font-mono text-xs text-[var(--color-subtle)] max-md:hidden">
+                  {device.ip ? `${device.ip}${device.port ? `:${device.port}` : ""}` : (device.serial ?? "—")}
+                </span>
+                <RowMenu
+                  device={device}
+                  onRename={() => {
+                    setRenameTarget(device);
+                    setRenameValue(device.id);
+                  }}
+                  onRemove={() => setRemoveTarget(device)}
+                  onToggle={() => update.mutate({ id: device.id, patch: { disabled: !device.disabled } })}
+                />
+              </div>
+            ))}
+          </div>
         </Card>
       ) : (
-        <div className="grid grid-cols-2 gap-x-4 gap-y-7 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5">
           {devices.map((device) => (
             <div key={device.id} className="flex flex-col items-center gap-2">
               <button
@@ -89,52 +288,57 @@ export function DevicesPage() {
                 aria-label={`Open ${device.id}`}
               >
                 <PhoneFrame power slim maxWidth={150}>
-                  <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 bg-gradient-to-b from-[#171b25] to-[#0b0d12] px-2 text-center">
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 bg-gradient-to-b from-[var(--color-elevated)] to-[var(--color-surface)] px-2 text-center">
                     <StatusDot online={device.online} disabled={device.disabled} />
-                    <span className="w-full truncate text-xs font-medium text-white">{device.id}</span>
+                    <span className="w-full truncate text-xs font-medium">{device.id}</span>
                     <span className="w-full truncate text-[10px] text-[var(--color-muted)]">
                       {device.model ?? "Android device"}
                     </span>
-                    <Badge>{device.type === "wireless" ? "wifi" : device.type === "usb" ? "usb" : device.type ?? "—"}</Badge>
+                    <Badge>{device.type ?? "—"}</Badge>
                   </div>
                 </PhoneFrame>
               </button>
-
-              <div className="flex flex-wrap items-center justify-center gap-1">
-                {!device.online && !device.disabled ? (
-                  <Button variant="ghost" onClick={() => connect.mutate(device.id)} disabled={connect.isPending}>
-                    Connect
-                  </Button>
-                ) : null}
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setRenameTarget(device);
-                    setRenameValue(device.id);
-                  }}
-                >
-                  Rename
-                </Button>
-                <Button variant="ghost" onClick={() => update.mutate({ id: device.id, patch: { disabled: !device.disabled } })}>
-                  {device.disabled ? "Enable" : "Disable"}
-                </Button>
-                <Button variant="ghost" onClick={() => setRemoveTarget(device)}>
-                  Remove
-                </Button>
-              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setRenameTarget(device);
+                  setRenameValue(device.id);
+                }}
+              >
+                Rename
+              </Button>
             </div>
           ))}
         </div>
       )}
 
-      {(update.error || connect.error) ? (
+      {update.error || connect.error ? (
         <ErrorText>{((update.error ?? connect.error) as Error).message}</ErrorText>
       ) : null}
 
       {renameTarget ? (
-        <Modal title="Rename device" onClose={() => setRenameTarget(null)}>
+        <Modal
+          title="Rename device"
+          description="The name is also the key Fenox stores this device under."
+          onClose={() => setRenameTarget(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setRenameTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                form="rename-device"
+                disabled={update.isPending || !renameValue.trim() || renameValue.trim() === renameTarget.id}
+              >
+                {update.isPending ? "Saving…" : "Rename"}
+              </Button>
+            </>
+          }
+        >
           <form
-            className="space-y-4"
+            id="rename-device"
             onSubmit={(event) => {
               event.preventDefault();
               if (renameValue.trim() && renameValue.trim() !== renameTarget.id) {
@@ -149,36 +353,33 @@ export function DevicesPage() {
               <Input autoFocus value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
             </Field>
             <ErrorText>{(update.error as Error | null)?.message}</ErrorText>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setRenameTarget(null)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={update.isPending}>
-                Save
-              </Button>
-            </div>
           </form>
         </Modal>
       ) : null}
 
       {removeTarget ? (
-        <Modal title="Remove device" onClose={() => setRemoveTarget(null)}>
+        <Modal
+          title="Remove device"
+          onClose={() => setRemoveTarget(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setRemoveTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                disabled={remove.isPending}
+                onClick={() => remove.mutate(removeTarget.id, { onSuccess: () => setRemoveTarget(null) })}
+              >
+                {remove.isPending ? "Removing…" : "Remove"}
+              </Button>
+            </>
+          }
+        >
           <p className="text-sm text-[var(--color-muted)]">
-            Remove <span className="text-white">{removeTarget.id}</span> from Fenox? This does not unpair the phone; you can
-            connect it again.
+            Remove <span className="font-medium text-[var(--color-text)]">{removeTarget.id}</span> from Fenox? The phone
+            is not touched — you can add it again at any time.
           </p>
-          <div className="mt-5 flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setRemoveTarget(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => remove.mutate(removeTarget.id, { onSuccess: () => setRemoveTarget(null) })}
-              disabled={remove.isPending}
-            >
-              Remove
-            </Button>
-          </div>
         </Modal>
       ) : null}
     </div>

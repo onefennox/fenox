@@ -45,7 +45,7 @@ export function ProjectsPage() {
     return <Spinner label="Loading projects" />;
   }
   if (error) {
-    return <p className="text-sm text-red-400">{(error as Error).message}</p>;
+    return <p className="text-sm text-[var(--color-danger)]">{(error as Error).message}</p>;
   }
 
   const projects = Object.entries(data?.projects ?? {});
@@ -54,7 +54,7 @@ export function ProjectsPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-white">Projects</h1>
+          <h1 className="text-lg font-semibold tracking-tight">Projects</h1>
           <p className="mt-1 text-sm text-[var(--color-muted)]">
             Register Flutter projects, then run them on any connected device.
           </p>
@@ -68,7 +68,7 @@ export function ProjectsPage() {
       </div>
 
       {scan.data && scan.data.added.length > 0 ? (
-        <Card className="border-emerald-500/30 p-3 text-sm text-emerald-300">
+        <Card className="border-[var(--color-success)]/40 p-3 text-sm text-[var(--color-success)]">
           Registered {scan.data.added.join(", ")}.
         </Card>
       ) : null}
@@ -83,7 +83,7 @@ export function ProjectsPage() {
             <div key={name} className="flex items-center gap-4 p-4">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <Link to={`/projects/${encodeURIComponent(name)}`} className="font-medium text-white hover:underline">
+                  <Link to={`/projects/${encodeURIComponent(name)}`} className="font-medium text-[var(--color-text)] hover:underline">
                     {name}
                   </Link>
                   {project.package ? <Badge tone="accent">{project.package}</Badge> : null}
@@ -145,7 +145,7 @@ export function ProjectsPage() {
       {removeName ? (
         <Modal title="Remove project" onClose={() => setRemoveName(null)}>
           <p className="text-sm text-[var(--color-muted)]">
-            Remove <span className="text-white">{removeName}</span> from Fenox? The project files are not touched.
+            Remove <span className="text-[var(--color-text)]">{removeName}</span> from Fenox? The project files are not touched.
           </p>
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setRemoveName(null)}>
@@ -218,13 +218,13 @@ function AddProjectWizard({
                   index === step
                     ? "border-[var(--color-accent)] text-[var(--color-accent)]"
                     : index < step
-                      ? "border-emerald-500/60 text-emerald-400"
+                      ? "border-emerald-500/60 text-[var(--color-success)]"
                       : "border-[var(--color-border)] text-[var(--color-muted)]"
                 }`}
               >
                 {index + 1}
               </span>
-              <span className={index === step ? "text-white" : "text-[var(--color-muted)]"}>{label}</span>
+              <span className={index === step ? "text-[var(--color-text)]" : "text-[var(--color-muted)]"}>{label}</span>
               {index < STEPS.length - 1 ? <span className="text-[var(--color-border)]">—</span> : null}
             </li>
           ))}

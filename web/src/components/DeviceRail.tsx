@@ -94,7 +94,7 @@ function DevicePicker({
       </div>
 
       {pending > 0 ? (
-        <div className="border-t border-[var(--color-border)] px-4 py-3 text-xs text-amber-300">
+        <div className="border-t border-[var(--color-border)] px-4 py-3 text-xs text-[var(--color-warning)]">
           {pending === 1 ? "1 device is waiting" : `${pending} devices are waiting`} — check the phone for a prompt.
         </div>
       ) : null}
@@ -147,7 +147,7 @@ function DeviceScreenPane({ device, onBack }: { device: Device; onBack: () => vo
               onSizeChange={(width, height) => setAspect(width / height)}
             />
           ) : online ? (
-            <p className="px-4 text-center text-[11px] text-amber-300">Mirroring unavailable: {mirror.data?.reason}</p>
+            <p className="px-4 text-center text-[11px] text-[var(--color-warning)]">Mirroring unavailable: {mirror.data?.reason}</p>
           ) : null}
         </PhoneFrame>
 

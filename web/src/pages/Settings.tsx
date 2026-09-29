@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 
 import { getSettings, getTools, rotateToken, updateSettings } from "@/api/queries";
 import { PathField } from "@/components/FolderPicker";
-import { Button, Card, ErrorText, Field, Input, Spinner } from "@/components/ui";
+import { Button, Card, ErrorText, Field, Input, Skeleton, SkeletonRows } from "@/components/ui";
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
@@ -52,10 +52,17 @@ export function SettingsPage() {
   const rotate = useMutation({ mutationFn: rotateToken, onSuccess: (data) => setToken(data.token) });
 
   if (settings.isLoading) {
-    return <Spinner label="Loading settings" />;
+    return (
+      <Card className="space-y-3 p-4">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-2/3" />
+      </Card>
+    );
   }
   if (settings.error || !settings.data) {
-    return <p className="text-sm text-red-400">{(settings.error as Error | null)?.message ?? "Settings unavailable."}</p>;
+    return <p className="text-sm text-[var(--color-danger)]">{(settings.error as Error | null)?.message ?? "Settings unavailable."}</p>;
   }
 
   const current = settings.data;
@@ -63,12 +70,12 @@ export function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold text-white">Settings</h1>
+        <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-[var(--color-muted)]">How the hub is reached, and the token for scripts.</p>
       </div>
 
-      <Card className="space-y-4 p-5">
-        <h2 className="text-sm font-semibold text-white">Reach</h2>
+      <Card className="space-y-4 p-4">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Reach</h2>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           {current.reach_levels.map((level) => (
             <button
@@ -76,8 +83,8 @@ export function SettingsPage() {
               onClick={() => setForm({ ...form, reach: level.id })}
               className={`cursor-pointer rounded-lg border p-3 text-left text-sm transition ${
                 form.reach === level.id
-                  ? "border-[var(--color-accent)] bg-[var(--color-panel-hover)] text-white"
-                  : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-white"
+                  ? "border-[var(--color-accent)] bg-[var(--color-panel-hover)] text-[var(--color-text)]"
+                  : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
               }`}
             >
               {level.label}
@@ -106,7 +113,7 @@ export function SettingsPage() {
             Save
           </Button>
           {current.restart_required ? (
-            <span className="text-xs text-amber-300">Restart Fenox to apply the new address.</span>
+            <span className="text-xs text-[var(--color-warning)]">Restart Fenox to apply the new address.</span>
           ) : null}
         </div>
         <ErrorText>{(save.error as Error | null)?.message}</ErrorText>
@@ -115,15 +122,15 @@ export function SettingsPage() {
         </div>
       </Card>
 
-      <Card className="space-y-4 p-5">
+      <Card className="space-y-4 p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-white">Tools</h2>
+          <h2 className="text-sm font-semibold text-[var(--color-text)]">Tools</h2>
           <Button variant="ghost" onClick={() => queryClient.invalidateQueries({ queryKey: ["tools"] })}>
             Re-detect
           </Button>
         </div>
         {tools.isLoading ? (
-          <Spinner label="Detecting tools" />
+          <SkeletonRows rows={4} />
         ) : tools.data ? (
           <div className="space-y-2 text-sm">
             <ToolLine label="adb (client)" value={tools.data.adb.client} />
@@ -168,8 +175,8 @@ export function SettingsPage() {
         <ErrorText>{(save.error as Error | null)?.message}</ErrorText>
       </Card>
 
-      <Card className="space-y-3 p-5">
-        <h2 className="text-sm font-semibold text-white">Access token</h2>
+      <Card className="space-y-3 p-4">
+        <h2 className="text-sm font-semibold text-[var(--color-text)]">Access token</h2>
         <p className="text-xs text-[var(--color-muted)]">
           Used by scripts and the CLI, as <code>Authorization: Bearer …</code>. The owner session cookie is separate.
         </p>
@@ -188,7 +195,7 @@ function ToolLine({ label, value }: { label: string; value: string | null }) {
   return (
     <div className="flex justify-between border-b border-[var(--color-border)] py-1.5 text-sm last:border-0">
       <span className="text-[var(--color-muted)]">{label}</span>
-      <span className={`truncate pl-4 text-right ${value ? "text-white" : "text-amber-300"}`}>{value ?? "not found"}</span>
+      <span className={`truncate pl-4 text-right ${value ? "text-[var(--color-text)]" : "text-[var(--color-warning)]"}`}>{value ?? "not found"}</span>
     </div>
   );
 }
