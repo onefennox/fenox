@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
+  Download,
   Files as FilesIcon,
   FolderCog,
   Hammer,
@@ -12,6 +13,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
+  artifactUrl,
   getProject,
   keys,
   listBuilds,
@@ -22,7 +24,7 @@ import {
 } from "@/api/queries";
 import type { Project } from "@/api/types";
 import { PathField } from "@/components/FolderPicker";
-import { BuildStatus } from "@/components/builds";
+import { BuildLauncher, BuildStatus } from "@/components/builds";
 import { Tabs } from "@/components/Tabs";
 import { Badge, Button, Card, ErrorText, Field, Input, Modal, Select, SkeletonRows } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
@@ -90,6 +92,7 @@ export function ProjectDetailPage() {
   const projectBuilds = builds.data?.builds ?? [];
   const running = projectBuilds.filter((build) => build.status === "running").length;
   const last = projectBuilds[0];
+  const lastArtifact = projectBuilds.find((build) => build.status === "succeeded" && build.artifact_name);
 
   return (
     <div className="space-y-4">
@@ -107,6 +110,34 @@ export function ProjectDetailPage() {
           {running ? <Badge tone="accent">{running} building</Badge> : null}
         </div>
         <p className="mt-0.5 truncate font-mono text-xs text-[var(--color-subtle)]">{entry.path}</p>
+      </div>
+
+      {/* The actions belong here, not only inside a tab: building is what a
+          project page is for, and hunting for it behind a tab is a tax on the
+          most common thing anyone does. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <BuildLauncher project={projectId} kinds={builds.data?.kinds ?? []} busy={running > 0} compact />
+        <span className="mx-1 hidden h-5 w-px bg-[var(--color-border)] sm:block" />
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={!device || start.isPending}
+          onClick={() => start.mutate()}
+          title={online.length ? "Run on the selected device" : "No device is online"}
+        >
+          <Play size={13} />
+          Run
+        </Button>
+        {lastArtifact ? (
+          <a
+            href={artifactUrl(lastArtifact.id)}
+            download
+            className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-2.5 text-xs font-medium transition-colors hover:border-[var(--color-border-strong)]"
+          >
+            <Download size={12} />
+            {lastArtifact.artifact_name}
+          </a>
+        ) : null}
       </div>
 
       <Tabs
