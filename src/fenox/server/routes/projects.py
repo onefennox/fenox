@@ -32,6 +32,9 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     path: str | None = None
+    #: Pinned projects are shown first, and are the ones that stay visible when
+    #: the project list is collapsed — which is the point of pinning.
+    pinned: bool | None = None
     port: str | None = None
     api_local: str | None = None
     api_remote: str | None = None

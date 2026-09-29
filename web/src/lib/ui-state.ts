@@ -14,10 +14,19 @@ interface UiState {
   theme: Theme;
   sidebarCollapsed: boolean;
   paletteOpen: boolean;
+  /**
+   * Whether every project is allowed to be on screen.
+   *
+   * Off by default and intentionally not persisted: when someone is sharing
+   * their screen, the safe state has to be the one a reload gives them. A
+   * remembered reveal is a reveal that gets forgotten.
+   */
+  projectsRevealed: boolean;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   toggleSidebar: () => void;
   setPaletteOpen: (open: boolean) => void;
+  setProjectsRevealed: (revealed: boolean) => void;
 }
 
 const THEME_KEY = "fenox.theme";
@@ -53,6 +62,7 @@ export const useUi = create<UiState>((set, get) => ({
   theme: initialTheme,
   sidebarCollapsed: stored(SIDEBAR_KEY, "expanded", ["expanded", "collapsed"]) === "collapsed",
   paletteOpen: false,
+  projectsRevealed: false,
   setTheme: (theme) => {
     applyTheme(theme);
     remember(THEME_KEY, theme);
@@ -65,4 +75,5 @@ export const useUi = create<UiState>((set, get) => ({
     set({ sidebarCollapsed: next });
   },
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  setProjectsRevealed: (projectsRevealed) => set({ projectsRevealed }),
 }));

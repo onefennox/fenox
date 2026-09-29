@@ -19,6 +19,7 @@ import { useNavigate } from "react-router-dom";
 import { keys, listDevices, listProjects, listRuns } from "@/api/queries";
 import { cn } from "@/lib/format";
 import { useUi } from "@/lib/ui-state";
+import { useRecentProjects } from "@/hooks/useRecentProjects";
 
 interface Command {
   id: string;
@@ -54,6 +55,8 @@ export function CommandPalette() {
   const toggleTheme = useUi((state) => state.toggleTheme);
   const theme = useUi((state) => state.theme);
   const navigate = useNavigate();
+  const projectsRevealed = useUi((state) => state.projectsRevealed);
+  const recentProjects = useRecentProjects();
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -117,7 +120,15 @@ export function CommandPalette() {
       });
     }
 
-    for (const name of Object.keys(projects.data?.projects ?? {})) {
+    // Same rule as the Projects page: only pinned and recent unless the owner
+    // has explicitly revealed the rest, so opening the palette while someone is
+    // watching is not a leak.
+    const catalogue = projects.data?.projects ?? {};
+    const allowed = projectsRevealed
+      ? Object.keys(catalogue)
+      : Object.keys(catalogue).filter((name) => catalogue[name].pinned || recentProjects.includes(name));
+
+    for (const name of allowed) {
       items.push({
         id: `project-${name}`,
         label: name,
@@ -140,7 +151,7 @@ export function CommandPalette() {
     }
 
     return items;
-  }, [devices.data, projects.data, runs.data, theme, toggleTheme, navigate]);
+  }, [devices.data, projects.data, runs.data, theme, toggleTheme, navigate, projectsRevealed, recentProjects]);
 
   const filtered = useMemo(
     () => commands.filter((command) => matches(query, `${command.label} ${command.keywords ?? ""} ${command.group}`)),

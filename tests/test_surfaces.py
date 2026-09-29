@@ -165,3 +165,30 @@ def test_activity_requires_authentication(tmp_path):
         client.post("/api/setup", json={"password": PASSWORD})
         client.post("/api/auth/logout")
         assert client.get("/api/activity").status_code in (401, 403)
+
+
+# --- pinning ----------------------------------------------------------------
+# Pinning is what keeps a project visible when the list is collapsed, which is
+# the point of it: it is the set you are willing to show someone.
+
+def test_pinned_defaults_to_unset_and_round_trips(client):
+    entry = client.get("/api/projects/demo").json()["project"]
+    assert not entry.get("pinned")
+
+    assert client.patch("/api/projects/demo", json={"pinned": True}).json()["project"]["pinned"] is True
+    assert client.get("/api/projects/demo").json()["project"]["pinned"] is True
+
+    # Unpinning has to persist too, which is why the route must not treat a
+    # false value as "not provided".
+    assert client.patch("/api/projects/demo", json={"pinned": False}).json()["project"]["pinned"] is False
+    assert client.get("/api/projects/demo").json()["project"]["pinned"] is False
+
+
+def test_pinning_survives_an_unrelated_edit(client):
+    """Editing the port must not silently drop the pin."""
+    client.patch("/api/projects/demo", json={"pinned": True})
+    client.patch("/api/projects/demo", json={"port": "9999"})
+
+    entry = client.get("/api/projects/demo").json()["project"]
+    assert entry["pinned"] is True
+    assert entry["port"] == "9999"

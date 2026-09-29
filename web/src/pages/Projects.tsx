@@ -1,17 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  EyeOff,
   Folder,
   FolderKanban,
   Hammer,
   MoreHorizontal,
-  Play,
+  Pin,
+  PinOff,
   Search,
   Settings2,
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
   createProject,
@@ -21,6 +26,7 @@ import {
   listProjects,
   scanProjects,
   startBuild,
+  updateProject,
 } from "@/api/queries";
 import type { Build, Project } from "@/api/types";
 import { FolderPicker } from "@/components/FolderPicker";
@@ -35,8 +41,11 @@ import {
   Input,
   Modal,
   SkeletonRows,
+  Tooltip,
 } from "@/components/ui";
+import { forgetProject, rememberProject, useRecentProjects } from "@/hooks/useRecentProjects";
 import { cn, timeAgo } from "@/lib/format";
+import { useUi } from "@/lib/ui-state";
 import { toast } from "@/lib/toast";
 
 /** Build actions for one project, behind a button so the row stays a row. */
@@ -114,6 +123,7 @@ function ProjectRow({
   onRemove: () => void;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [menu, setMenu] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -126,12 +136,37 @@ function ProjectRow({
     return () => document.removeEventListener("mousedown", onDown);
   }, [menu]);
 
+  const pin = useMutation({
+    mutationFn: (next: boolean) => updateProject(name, { pinned: next }),
+    onSuccess: (_result, next) => {
+      toast.success(next ? `${name} pinned` : `${name} unpinned`);
+      queryClient.invalidateQueries({ queryKey: keys.projects });
+    },
+    onError: (error: Error) => toast.error("Could not change the pin", error.message),
+  });
+
+  const open = () => {
+    rememberProject(name);
+    navigate(`/projects/${encodeURIComponent(name)}`);
+  };
+
   return (
     <div className="group flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 transition-colors hover:bg-[var(--color-panel-hover)]">
       <button
-        onClick={() => navigate(`/projects/${encodeURIComponent(name)}`)}
-        className="min-w-0 flex-1 cursor-pointer text-left"
+        onClick={() => pin.mutate(!project.pinned)}
+        disabled={pin.isPending}
+        title={project.pinned ? "Unpin" : "Pin to the top"}
+        className={cn(
+          "shrink-0 cursor-pointer rounded-[var(--radius-sm)] p-1 transition-colors",
+          project.pinned
+            ? "text-[var(--color-accent)]"
+            : "text-[var(--color-subtle)] opacity-0 group-hover:opacity-100 hover:text-[var(--color-text)]",
+        )}
       >
+        {project.pinned ? <Pin size={13} /> : <PinOff size={13} />}
+      </button>
+
+      <button onClick={open} className="min-w-0 flex-1 cursor-pointer text-left">
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium">{name}</span>
           {project.package ? <Badge tone="accent">{project.package}</Badge> : null}
@@ -141,7 +176,10 @@ function ProjectRow({
 
       <div className="flex shrink-0 items-center gap-2">
         {last ? (
-          <span className="hidden items-center gap-1.5 sm:flex" title={`${last.artifact_name} · ${timeAgo(last.started_at)}`}>
+          <span
+            className="hidden items-center gap-1.5 sm:flex"
+            title={`${last.artifact_name} · ${timeAgo(last.started_at)}`}
+          >
             <BuildStatus status={last.status} />
             <span className="tnum text-[11px] text-[var(--color-subtle)]">{timeAgo(last.started_at)}</span>
           </span>
@@ -151,11 +189,9 @@ function ProjectRow({
 
         <BuildMenu project={name} />
 
-        <Link to={`/projects/${encodeURIComponent(name)}`}>
-          <Button size="sm" variant="ghost">
-            Open
-          </Button>
-        </Link>
+        <Button size="sm" variant="ghost" onClick={open}>
+          Open
+        </Button>
 
         <div className="relative" ref={ref}>
           <button
@@ -167,20 +203,26 @@ function ProjectRow({
           </button>
           {menu ? (
             <div className="animate-in absolute right-0 z-40 mt-1 w-44 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-[var(--color-panel)] py-1 shadow-xl">
-              <Link
-                to={`/projects/${encodeURIComponent(name)}`}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+              <button
+                onClick={() => {
+                  setMenu(false);
+                  pin.mutate(!project.pinned);
+                }}
+                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
+              >
+                {project.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                {project.pinned ? "Unpin" : "Pin to top"}
+              </button>
+              <button
+                onClick={() => {
+                  setMenu(false);
+                  open();
+                }}
+                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
               >
                 <Settings2 size={13} />
                 Configure
-              </Link>
-              <Link
-                to="/runs"
-                className="flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel-hover)] hover:text-[var(--color-text)]"
-              >
-                <Play size={13} />
-                Runs
-              </Link>
+              </button>
               <button
                 onClick={() => {
                   setMenu(false);
@@ -203,6 +245,7 @@ export function ProjectsPage() {
   const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: keys.projects, queryFn: listProjects });
   const builds = useQuery({ queryKey: keys.builds, queryFn: () => listBuilds(), refetchInterval: 8000 });
+  const recent = useRecentProjects();
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -210,6 +253,8 @@ export function ProjectsPage() {
   const [removeName, setRemoveName] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [filter, setFilter] = useState("");
+  const revealed = useUi((state) => state.projectsRevealed);
+  const setRevealed = useUi((state) => state.setProjectsRevealed);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: keys.projects });
   const create = useMutation({
@@ -236,27 +281,66 @@ export function ProjectsPage() {
   });
   const remove = useMutation({
     mutationFn: deleteProject,
-    onSuccess: () => {
+    onSuccess: (_result, name) => {
+      forgetProject(name);
       setRemoveName(null);
       toast.success("Project removed");
       refresh();
     },
   });
 
-  if (projects.error) {
-    return <ErrorText>{(projects.error as Error).message}</ErrorText>;
-  }
-
   const entries = Object.entries(projects.data?.projects ?? {});
+
+  // Most recent build per project, so a row says what actually happened.
+  const latest = useMemo(() => {
+    const map = new Map<string, Build>();
+    for (const build of builds.data?.builds ?? []) {
+      if (!map.has(build.project)) map.set(build.project, build);
+    }
+    return map;
+  }, [builds.data]);
+
   const needle = filter.trim().toLowerCase();
-  const shown = needle
+  const matching = needle
     ? entries.filter(([name, project]) => `${name} ${project.package ?? ""}`.toLowerCase().includes(needle))
     : entries;
+  const byName = new Map(matching);
 
-  // The most recent build for each project, so the list says what actually happened.
-  const latest = new Map<string, Build>();
-  for (const build of builds.data?.builds ?? []) {
-    if (!latest.has(build.project)) latest.set(build.project, build);
+  const pinned = matching.filter(([, project]) => project.pinned);
+  const recentEntries = recent
+    .map((name) => [name, byName.get(name)] as const)
+    .filter((entry): entry is [string, Project] => Boolean(entry[1]))
+    .filter(([name]) => !pinned.some(([pinnedName]) => pinnedName === name));
+
+  const atTop = new Set([...pinned, ...recentEntries].map(([name]) => name));
+  const others = matching.filter(([name]) => !atTop.has(name));
+
+  // Collapsed by default, and deliberately not persisted: the safe state is the
+  // one you get when you reload, so a reveal cannot be forgotten.
+  const showOthers = revealed || Boolean(needle);
+
+  const section = (title: string, rows: Array<[string, Project]>) =>
+    rows.length ? (
+      <div>
+        <h2 className="mb-1.5 text-[10px] font-semibold tracking-wider text-[var(--color-subtle)] uppercase">{title}</h2>
+        <Card className="overflow-hidden">
+          <div className="divide-y divide-[var(--color-border)]">
+            {rows.map(([name, project]) => (
+              <ProjectRow
+                key={name}
+                name={name}
+                project={project}
+                last={latest.get(name)}
+                onRemove={() => setRemoveName(name)}
+              />
+            ))}
+          </div>
+        </Card>
+      </div>
+    ) : null;
+
+  if (projects.error) {
+    return <ErrorText>{(projects.error as Error).message}</ErrorText>;
   }
 
   return (
@@ -281,8 +365,8 @@ export function ProjectsPage() {
       </div>
 
       {entries.length > 0 ? (
-        <Card className="p-3">
-          <div className="relative">
+        <Card className="flex flex-wrap items-center gap-2 p-3">
+          <div className="relative min-w-48 flex-1">
             <Search size={13} className="absolute top-1/2 left-2.5 -translate-y-1/2 text-[var(--color-subtle)]" />
             <Input
               value={filter}
@@ -300,15 +384,21 @@ export function ProjectsPage() {
               </button>
             ) : null}
           </div>
+          <Tooltip label={revealed ? "Hide the rest again" : "Show every registered project"}>
+            <Button variant="ghost" size="sm" onClick={() => setRevealed(!revealed)}>
+              {revealed ? <EyeOff size={13} /> : <Eye size={13} />}
+              {revealed ? "Hide others" : `Show all (${others.length})`}
+            </Button>
+          </Tooltip>
         </Card>
       ) : null}
 
-      <Card className="overflow-hidden">
-        {projects.isLoading ? (
-          <div className="p-4">
-            <SkeletonRows rows={4} />
-          </div>
-        ) : entries.length === 0 ? (
+      {projects.isLoading ? (
+        <Card className="p-4">
+          <SkeletonRows rows={4} />
+        </Card>
+      ) : entries.length === 0 ? (
+        <Card>
           <EmptyState
             icon={<FolderKanban size={22} />}
             title="No projects yet"
@@ -319,22 +409,52 @@ export function ProjectsPage() {
               </Button>
             }
           />
-        ) : shown.length === 0 ? (
+        </Card>
+      ) : matching.length === 0 ? (
+        <Card>
           <EmptyState title="Nothing matches" description={`No project contains “${filter}”.`} />
-        ) : (
-          <div className="divide-y divide-[var(--color-border)]">
-            {shown.map(([name, project]) => (
-              <ProjectRow
-                key={name}
-                name={name}
-                project={project}
-                last={latest.get(name)}
-                onRemove={() => setRemoveName(name)}
-              />
-            ))}
-          </div>
-        )}
-      </Card>
+        </Card>
+      ) : (
+        <div className="space-y-5">
+          {section("Pinned", pinned)}
+          {section("Recent", recentEntries)}
+
+          {others.length > 0 ? (
+            <div>
+              <button
+                onClick={() => setRevealed(!revealed)}
+                className="mb-1.5 flex cursor-pointer items-center gap-1.5 text-[10px] font-semibold tracking-wider text-[var(--color-subtle)] uppercase transition-colors hover:text-[var(--color-muted)]"
+              >
+                {showOthers ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                Other projects · {others.length}
+                {showOthers ? null : <span className="normal-case">hidden</span>}
+              </button>
+              {showOthers ? (
+                <Card className="overflow-hidden">
+                  <div className="divide-y divide-[var(--color-border)]">
+                    {others.map(([name, project]) => (
+                      <ProjectRow
+                        key={name}
+                        name={name}
+                        project={project}
+                        last={latest.get(name)}
+                        onRemove={() => setRemoveName(name)}
+                      />
+                    ))}
+                  </div>
+                </Card>
+              ) : null}
+            </div>
+          ) : null}
+
+          {pinned.length === 0 && recentEntries.length === 0 ? (
+            <p className="flex items-center gap-1.5 text-xs text-[var(--color-subtle)]">
+              <Folder size={12} />
+              Pin a project to keep it visible here — handy when sharing your screen.
+            </p>
+          ) : null}
+        </div>
+      )}
 
       {wizardOpen ? (
         <AddProjectWizard
@@ -358,7 +478,6 @@ export function ProjectsPage() {
             setForm((current) => ({
               ...current,
               path,
-              // Only fill the name if they have not typed one already.
               name: current.name.trim() || suggested || "",
             }));
             setPicking(false);

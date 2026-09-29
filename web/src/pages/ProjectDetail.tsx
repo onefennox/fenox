@@ -27,6 +27,7 @@ import { PathField } from "@/components/FolderPicker";
 import { BuildLauncher, BuildStatus } from "@/components/builds";
 import { Tabs } from "@/components/Tabs";
 import { Badge, Button, Card, ErrorText, Field, Input, Modal, Select, SkeletonRows } from "@/components/ui";
+import { rememberProject } from "@/hooks/useRecentProjects";
 import { timeAgo } from "@/lib/format";
 import { BuildsPanel } from "./project/BuildsPanel";
 import { ProjectFilesPanel } from "./project/ProjectFilesPanel";
@@ -50,6 +51,12 @@ export function ProjectDetailPage() {
   useEffect(() => {
     if (!device && online.length > 0) setDevice(online[0].id);
   }, [device, online]);
+
+  // Opening a project is what "recent" means, so it is recorded here rather
+  // than inferred from a build or a run.
+  useEffect(() => {
+    if (project.data) rememberProject(projectId);
+  }, [project.data, projectId]);
 
   const start = useMutation({
     mutationFn: () => startRun(projectId, device, mode),

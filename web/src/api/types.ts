@@ -68,6 +68,8 @@ export interface DeviceEvent {
 
 export interface Project {
   path: string;
+  /** Shown first, and stays visible when the project list is collapsed. */
+  pinned?: boolean;
   port: string;
   api_local: string;
   api_remote?: string;
