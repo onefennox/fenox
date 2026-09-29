@@ -21,6 +21,7 @@ from ..core.config import Store
 from ..core.sessions import SessionManager
 from ..version import __version__
 from . import ws as ws_routes
+from .routes import activity as activity_routes
 from .routes import auth as auth_routes
 from .routes import browser as browser_routes
 from .routes import builds as build_routes
@@ -103,6 +104,7 @@ def create_app(data_dir: Path | str | None = None, store: Store | None = None) -
     app.include_router(mirror_routes.router)
     app.include_router(browser_routes.router)
     app.include_router(build_routes.router)
+    app.include_router(activity_routes.router)
     app.include_router(ws_routes.router)
 
     web_dir = _bundled_web_dir()

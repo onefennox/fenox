@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getTelemetry, keys } from "@/api/queries";
 import type { Device } from "@/api/types";
 import { Card, Spinner } from "@/components/ui";
+import { CapturesCard } from "./CapturesCard";
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -56,6 +57,8 @@ export function OverviewPanel({ device }: { device: Device }) {
           </>
         ) : null}
       </Card>
+
+      <CapturesCard />
 
       <Card className="p-5 lg:col-span-2">
         <h2 className="mb-2 text-sm font-semibold text-white">Screen</h2>

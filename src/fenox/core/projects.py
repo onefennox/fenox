@@ -242,3 +242,81 @@ def scan(store, base: str) -> list[tuple[str, dict]]:
         reserved.add(name)
         found.append((name, entry))
     return found
+
+
+#: Directories that are noise in a project tree and slow to walk.
+_TREE_SKIP = {
+    ".git", ".dart_tool", "build", ".idea", ".gradle", "node_modules",
+    "__pycache__", ".fvm", ".vscode", "ios/Pods",
+}
+
+#: Reading a file into the browser is a convenience, not a transfer protocol.
+_MAX_PREVIEW = 512 * 1024
+
+
+def project_root(entry: dict) -> Path | None:
+    path = Path(os.path.expanduser(str(entry.get("path") or ""))).resolve()
+    return path if path.is_dir() else None
+
+
+def resolve_within(entry: dict, relative: str) -> Path | None:
+    """A path inside the project, or None if it escapes or does not exist.
+
+    The whole point: this serves the owner's own filesystem, so a request for
+    `../../.ssh/id_rsa` must not resolve. Comparison is on the *resolved* path,
+    which is what makes symlinks safe too.
+    """
+    root = project_root(entry)
+    if root is None:
+        return None
+    candidate = (root / (relative or "")).resolve()
+    if candidate != root and root not in candidate.parents:
+        return None
+    return candidate if candidate.exists() else None
+
+
+def list_tree(entry: dict, relative: str = "") -> tuple[list[dict], str]:
+    """(entries, error) for one directory of the project."""
+    target = resolve_within(entry, relative)
+    if target is None:
+        return [], "that path is outside the project"
+    if not target.is_dir():
+        return [], "not a directory"
+
+    root = project_root(entry)
+    entries: list[dict] = []
+    try:
+        for child in sorted(target.iterdir(), key=lambda item: (item.is_file(), item.name.lower())):
+            if child.name in _TREE_SKIP or child.name.startswith("."):
+                continue
+            try:
+                stat = child.stat()
+            except OSError:
+                continue  # a broken symlink, or a race; skip rather than fail the listing
+            entries.append({
+                "name": child.name,
+                "path": str(child.relative_to(root)) if root else child.name,
+                "dir": child.is_dir(),
+                "size": 0 if child.is_dir() else stat.st_size,
+            })
+    except OSError as exc:
+        return [], str(exc)
+    return entries, ""
+
+
+def read_text_file(entry: dict, relative: str) -> tuple[str, str]:
+    """(text, error) for a file in the project, refusing anything oversized or binary."""
+    target = resolve_within(entry, relative)
+    if target is None:
+        return "", "that path is outside the project"
+    if target.is_dir():
+        return "", "that is a directory"
+    try:
+        if target.stat().st_size > _MAX_PREVIEW:
+            return "", f"file is larger than {_MAX_PREVIEW // 1024} KB"
+        data = target.read_bytes()
+    except OSError as exc:
+        return "", str(exc)
+    if b"\x00" in data[:4096]:
+        return "", "that looks like a binary file"
+    return data.decode("utf-8", errors="replace"), ""

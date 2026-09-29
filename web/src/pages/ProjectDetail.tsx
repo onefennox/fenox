@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
+  Files as FilesIcon,
   FolderCog,
   Hammer,
   Info,
@@ -26,6 +27,7 @@ import { Tabs } from "@/components/Tabs";
 import { Badge, Button, Card, ErrorText, Field, Input, Modal, Select, SkeletonRows } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
 import { BuildsPanel } from "./project/BuildsPanel";
+import { ProjectFilesPanel } from "./project/ProjectFilesPanel";
 import { QualityPanel } from "./project/QualityPanel";
 
 export function ProjectDetailPage() {
@@ -127,6 +129,12 @@ export function ProjectDetailPage() {
             label: "Quality",
             icon: <ShieldCheck size={15} />,
             render: () => <QualityPanel project={projectId} />,
+          },
+          {
+            id: "files",
+            label: "Files",
+            icon: <FilesIcon size={15} />,
+            render: () => <ProjectFilesPanel project={projectId} />,
           },
           {
             id: "run",

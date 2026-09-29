@@ -177,3 +177,33 @@ async def run_quality(request: Request, project_id: str, body: QualityRequest) -
     started = time.time()
     ok, output = await run_in_threadpool(flutter.run_action, binary, entry, body.action)
     return {"action": body.action, "ok": ok, "output": output, "seconds": round(time.time() - started, 1)}
+
+
+@router.get("/{project_id}/tree")
+def project_tree(request: Request, project_id: str, path: str = "") -> dict:
+    """One directory of the project's own files.
+
+    Confined to the project: `resolve_within` compares resolved paths, so a
+    request cannot walk out with `..` or through a symlink.
+    """
+    entry = request.app.state.store.project(project_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    entries, error = projects.list_tree(entry, path)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    root = projects.project_root(entry)
+    parent = str(Path(path).parent) if path and path != "." else ""
+    return {"path": path, "parent": parent, "root": str(root) if root else "", "entries": entries}
+
+
+@router.get("/{project_id}/file")
+def project_file(request: Request, project_id: str, path: str) -> dict:
+    """The contents of one text file, for reading in the browser."""
+    entry = request.app.state.store.project(project_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    text, error = projects.read_text_file(entry, path)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return {"path": path, "text": text}

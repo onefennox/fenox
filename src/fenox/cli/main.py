@@ -270,7 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--reload", action="store_true", help="Reload on code changes (development)")
     serve.add_argument("--tls-cert", default=None, help="TLS certificate (or FENOX_TLS_CERT)")
     serve.add_argument("--tls-key", default=None, help="TLS private key (or FENOX_TLS_KEY)")
-    serve.add_argument("--log-level", default="info", choices=["critical", "error", "warning", "info", "debug", "trace"])
+    # Default None so FENOX_LOG_LEVEL is honoured; a default of "info" here
+    # silently overrode the documented environment variable.
+    serve.add_argument("--log-level", default=None, choices=["critical", "error", "warning", "info", "debug", "trace"])
     serve.set_defaults(func=_cmd_serve)
 
     auth = sub.add_parser("auth", help="Owner credential management")

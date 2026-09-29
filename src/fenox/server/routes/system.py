@@ -5,8 +5,11 @@ Kept deliberately read-only for now; guided tool installation arrives with M6.
 from __future__ import annotations
 
 import sys
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ...core import adb, connect, doctor, host, projects, usbipd
@@ -131,3 +134,50 @@ def system_browse(path: str | None = None, _: None = Depends(require_owner)) -> 
     if listing["flutter"]:
         listing["suggested_name"] = projects.suggest_name(listing["path"])
     return listing
+
+
+def _capture_files() -> list[dict]:
+    """Screenshots and recordings Fenox has taken, newest first."""
+    rows: list[dict] = []
+    for kind, directory in host.output_dirs().items():
+        if kind == "logs" or not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            rows.append({
+                "name": path.name,
+                "kind": kind,
+                "path": str(path),
+                "size": stat.st_size,
+                "at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            })
+    rows.sort(key=lambda row: row["at"], reverse=True)
+    return rows
+
+
+@router.get("/captures")
+def system_captures(_: None = Depends(require_owner)) -> dict:
+    """Screenshots and recordings, with where they live on disk."""
+    return {"directory": str(host.capture_root()), "captures": _capture_files()[:200]}
+
+
+@router.get("/captures/download")
+def system_capture_download(path: str, _: None = Depends(require_owner)) -> FileResponse:
+    """Serve one capture.
+
+    The path is checked against the known capture directories rather than
+    trusted: this route takes a filesystem path from the query string, so
+    without that check it would read anything the hub can read.
+    """
+    target = Path(path).resolve()
+    allowed = [directory.resolve() for kind, directory in host.output_dirs().items() if kind != "logs"]
+    if not any(target == directory or directory in target.parents for directory in allowed):
+        raise HTTPException(status_code=403, detail="that file is outside the Fenox output folders")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="no such file")
+    return FileResponse(target, filename=target.name)

@@ -113,6 +113,12 @@ class Browser:
         self._pending: dict[int, asyncio.Future] = {}
         self._reader: asyncio.Task | None = None
         self._frames: asyncio.Queue[bytes] = asyncio.Queue(maxsize=3)
+        #: Commands with no useful reply, drained by their own task. Sending them
+        #: inline would make the read loop wait on the socket, and frames arrive
+        #: far faster than command replies — which starved the replies and made
+        #: every command time out while a stream was running.
+        self._outbox: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+        self._sender: asyncio.Task | None = None
         self._screencasting = False
         self._start_lock = asyncio.Lock()
         self.state = BrowserState()
@@ -168,6 +174,7 @@ class Browser:
 
             self._ws = await websockets.connect(page_ws, max_size=64_000_000)
             self._reader = asyncio.create_task(self._read_loop())
+            self._sender = asyncio.create_task(self._send_loop())
             self._next_id = 0
             self._pending.clear()
             self._screencasting = False
@@ -215,6 +222,7 @@ class Browser:
                     continue
                 if message.get("method") == "Page.screencastFrame":
                     params = message.get("params", {})
+                    log.debug("frame %s bytes", len(params.get("data", "")))
                     try:
                         self._frames.put_nowait(base64.b64decode(params.get("data", "")))
                     except asyncio.QueueFull:
@@ -237,13 +245,26 @@ class Browser:
             self.state.running = False
 
     async def _notify(self, method: str, params: dict | None = None) -> None:
-        """Send a command that has no useful reply, without tracking a future."""
-        if self._ws is None:
-            return
+        """Queue a command that has no useful reply. Never blocks the caller."""
         try:
-            await self._ws.send(json.dumps({"method": method, "params": params or {}}))
-        except Exception as exc:
-            log.debug("%s could not be sent: %s", method, exc)
+            self._outbox.put_nowait(json.dumps({"method": method, "params": params or {}}))
+        except asyncio.QueueFull:
+            pass  # a backlog of acks is worse than dropping one
+
+    async def _send_loop(self) -> None:
+        """Drain queued notifications. Runs beside the reader, not inside it."""
+        try:
+            while True:
+                message = await self._outbox.get()
+                if self._ws is None:
+                    continue
+                try:
+                    await self._ws.send(message)
+                except Exception as exc:
+                    log.debug("could not send: %s", exc)
+                    return
+        except asyncio.CancelledError:
+            raise
 
     async def _cmd(self, method: str, params: dict | None = None, timeout: float = 20.0) -> dict:
         if self._ws is None:
@@ -309,7 +330,7 @@ class Browser:
             # pixel, which is what makes click coordinates exact.
             "maxWidth": int(spec["width"]),
             "maxHeight": int(spec["height"]),
-            "everyNthFrame": 1,
+            "everyNthFrame": 2,
         }
         last: Exception | None = None
         for attempt in range(attempts):
@@ -373,9 +394,11 @@ class Browser:
 
     async def stop(self) -> None:
         await self.stop_screencast()
-        if self._reader is not None:
-            self._reader.cancel()
-            self._reader = None
+        for task in (self._reader, self._sender):
+            if task is not None:
+                task.cancel()
+        self._reader = None
+        self._sender = None
         if self._ws is not None:
             try:
                 await self._ws.close()

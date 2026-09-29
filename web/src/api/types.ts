@@ -329,3 +329,45 @@ export interface QualityResult {
   output: string;
   seconds: number;
 }
+
+export interface ProjectEntry {
+  name: string;
+  path: string;
+  dir: boolean;
+  size: number;
+}
+
+export interface ProjectTree {
+  path: string;
+  parent: string;
+  root: string;
+  entries: ProjectEntry[];
+}
+
+export interface ActivityItem {
+  kind: "build" | "run" | "device";
+  id: string;
+  title: string;
+  detail: string;
+  status: string;
+  at: string;
+  href: string;
+}
+
+export interface ActivityFeed {
+  items: ActivityItem[];
+  devices: ActivityItem[];
+}
+
+export interface Capture {
+  name: string;
+  kind: string;
+  path: string;
+  size: number;
+  at: string;
+}
+
+export interface CaptureList {
+  directory: string;
+  captures: Capture[];
+}

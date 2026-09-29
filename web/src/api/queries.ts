@@ -9,10 +9,13 @@ import type {
   DeviceInfo,
   DeviceList,
   ConnectionFinding,
+  ActivityFeed,
   BrowserStatus,
   Build,
+  Capture,
   BuildList,
   ConnectionReport,
+  ProjectTree,
   QualityResult,
   DirListing,
   DiscoverResult,
@@ -37,6 +40,9 @@ export const keys = {
   connection: ["connection"] as const,
   browser: ["browser"] as const,
   builds: ["builds"] as const,
+  activity: ["activity"] as const,
+  captures: ["captures"] as const,
+  tree: (project: string, path: string) => ["tree", project, path] as const,
   build: (id: string) => ["build", id] as const,
   browse: (path?: string) => ["browse", path ?? "~"] as const,
   projects: ["projects"] as const,
@@ -258,3 +264,15 @@ export const getQualityActions = (project: string) =>
   );
 export const runQuality = (project: string, action: string) =>
   api.post<QualityResult>(`/api/projects/${encodeURIComponent(project)}/quality`, { action });
+
+// -- activity and project files ---------------------------------------------
+
+export const getActivity = () => api.get<ActivityFeed>("/api/activity");
+export const getProjectTree = (project: string, path = "") =>
+  api.get<ProjectTree>(`/api/projects/${encodeURIComponent(project)}/tree?path=${encodeURIComponent(path)}`);
+export const getProjectFile = (project: string, path: string) =>
+  api.get<{ path: string; text: string }>(
+    `/api/projects/${encodeURIComponent(project)}/file?path=${encodeURIComponent(path)}`,
+  );
+
+export const listCaptures = () => api.get<{ directory: string; captures: Capture[] }>("/api/system/captures");
